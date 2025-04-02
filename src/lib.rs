@@ -1,0 +1,187 @@
+use kiddo::ImmutableKdTree;
+use kiddo::SquaredEuclidean;
+use std::num::NonZero;
+use std::fs::File;
+use std::io::ErrorKind;
+use rand_distr::{Normal, Distribution};
+
+pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
+    let mut unique_points = points.clone();
+    unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_points.dedup();
+    // println!("{:?}", unique_points);
+    let total_unique_points = unique_points.len();  
+    // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
+    let mut distance_total: f64 = 0.0;
+
+    for point in points 
+    {    
+        let index = unique_points.binary_search_by(|probe| probe.total_cmp(&point)).unwrap();
+        if index == 0 {
+            distance_total += f64::min(distance(point, unique_points[total_unique_points-1]),
+                            distance(point, unique_points[index+1])).ln();
+        }
+        else if index == total_unique_points-1 {
+            distance_total += f64::min(distance(point, unique_points[index-1]),
+                            distance(point, unique_points[0])).ln(); 
+        }
+        else {
+            distance_total += f64::min(distance(point, unique_points[index-1]),
+                            distance(point, unique_points[index+1])).ln();
+                        }}
+    distance_total
+}
+
+pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> f64 {
+    let mut points: Vec<[f64; 2]> = Vec::new();
+    for (point_1, point_2) in points_1.into_iter().zip(points_2) {
+        points.push([*point_1, *point_2]);
+    }
+
+    let kdtree: ImmutableKdTree<f64, 2> = ImmutableKdTree::new_from_slice(&points);
+    let mut distance_total: f64 = 0.0;
+    for point in points {
+        let mut result: f64 = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
+        if result == 0.0 {
+            result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2].distance;
+        }
+        distance_total += result.sqrt().ln();
+    }
+    distance_total
+}
+// Helper function to generate Guassian data
+pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
+    let normal = Normal::new(mean, std_dev).unwrap();
+    let mut rng = rand::thread_rng();
+    (0..size).map(|_| normal.sample(&mut rng)).collect()
+}
+
+fn distance(first_point: f64, second_points: f64) -> f64 {
+    (first_point - second_points).abs()
+}
+pub fn estimate_entropy(nn_distance: f64, n_frames: usize, constant: f64, n_internal_coords: usize) -> f64 {
+    // println!("{constant}");
+    (nn_distance/(n_frames as f64)) + constant*(n_internal_coords as f64)
+}
+pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
+    let file_result = File::open(file_path);
+    let file = match file_result {
+        Ok(file) => file,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => match File::create("hello.txt") {
+                Ok(fc) => fc,
+                Err(e) => panic!("Problem creating the file: {e:?}"),
+            },
+            other_error => {
+                panic!("Problem opening the file: {other_error:?}");
+            }
+        },
+    };
+    let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(file);
+    let mut all_data: Vec<Vec<f64>> = Vec::new();
+    for result in reader.records() {
+        let mut internal_coordinate_data: Vec<f64> = Vec::new();
+        match result {
+            Ok(record) => for entry in record.iter() {
+                let point: f64 = entry.parse().unwrap();
+                internal_coordinate_data.push(point);
+                },
+            Err(e) => println!("Error reading record: {:?}", e),
+        }
+        all_data.push(internal_coordinate_data);
+    }
+    all_data
+}
+
+pub fn cross_product(b1: [f64; 3], b2: [f64; 3]) -> [f64; 3] {
+    [
+        // x-component: b2_y * b2_z - b2_z * b2_y
+        b1[1] * b2[2] - b1[2] * b2[1],
+        // y-component: b1_z * b2_x - b1_x * b2_z
+        b1[2] * b2[0] - b1[0] * b2[2],
+        // z-component: b1_x * b2_y - b1_y * b2_x
+        b1[0] * b2[1] - b1[1] * b2[0],
+    ]
+}
+use libm::atan2;
+
+fn dot_product(array_1: [f64; 3], array_2: [f64; 3]) -> f64 {
+    array_1.iter().zip(array_2.iter()).map(|(x, y)| x * y).sum()
+}
+
+pub fn calc_bond(atom_1: [f64; 3], atom_2: [f64; 3]) -> f64 {
+    // sqSum = (a1[0]-a2[0])**2 + (a1[1]-a2[1])**2 + (a1[2]-a2[2])**2
+    let square_sum = (atom_1[0]-atom_2[0]).powi(2) + (atom_1[1]-atom_2[1]).powi(2) + (atom_1[2]-atom_2[2]).powi(2);
+    
+    // dist = math.sqrt(sqSum)
+    // return dist
+    square_sum.sqrt()
+}
+
+pub fn calc_angle(a1: [f64; 3], a2: [f64; 3], a3: [f64; 3]) -> f64 {
+    let v1 = [(a1[0]-a2[0]),(a1[1]-a2[1]),(a1[2]-a2[2])];
+    let v2 = [(a3[0]-a2[0]),(a3[1]-a2[1]),(a3[2]-a2[2])];
+
+    // v1Mag = math.sqrt((v1[0])**2 + (v1[1])**2 + (v1[2])**2)
+    let vector_1_magnitude = (v1[0].powi(2) + v1[1].powi(2) + v1[2].powi(2)).sqrt();
+
+    // v2Mag = math.sqrt((v2[0])**2 + (v2[1])**2 + (v2[2])**2)
+    let vector_2_magnitude = (v2[0].powi(2) + v2[1].powi(2) + v2[2].powi(2)).sqrt();
+
+    // let dot: f64 = (v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]);
+    let dot: f64 = dot_product(v1, v2);
+
+    let v1v2_mag = vector_1_magnitude*vector_2_magnitude;
+
+    // angle = math.acos(dot/v1v2Mag)
+    // return angle
+    (dot/v1v2_mag).acos()
+}
+pub fn calc_torsion(atom_1: [f64; 3], atom_2: [f64; 3], atom_3: [f64; 3], atom_4: [f64; 3]) -> f64 {
+    let bond_1: [f64; 3] = [atom_1[0] - atom_2[0], atom_1[1] - atom_2[1], atom_1[2] - atom_2[2]];
+    let bond_2: [f64; 3] = [atom_2[0] - atom_3[0], atom_2[1] - atom_3[1], atom_2[2] - atom_3[2]];
+    let bond_3: [f64; 3] = [atom_3[0] - atom_4[0], atom_3[1] - atom_4[1], atom_3[2] - atom_4[2]];
+
+    let cross_1: [f64; 3] = cross_product(bond_2, bond_3);
+    let cross_2: [f64; 3] = cross_product(bond_1, bond_2);
+
+    let mut plane_1 = dot_product(bond_1, cross_1);
+    plane_1 *= (dot_product(bond_2, bond_2)).sqrt();
+
+    let plane_2 = dot_product(cross_1, cross_2);
+
+    atan2(plane_1, plane_2)
+}
+
+pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>) -> Vec<Vec<f64>> {
+    let n_frames: usize = traj.len();
+    let n_int_coords: usize = bat_list.len();
+
+    // intCoords = np.empty((frameNumber,intCoordNumber))
+    let mut internal_coords: Vec<Vec<f64>> = Vec::new();
+
+    // for i in range(frameNumber):
+    for i in 0..n_frames as usize {
+        let mut frame_coords: Vec<f64> = Vec::new();
+        // for j in range(intCoordNumber):
+        for j in 0..n_int_coords as usize {
+            if bat_list[j].len() == 2 {
+                // intCoords[i,j] = bondCalc(traj[i,bat_list[j][0]],traj[i,bat_list[j][1]])
+                frame_coords.push(calc_bond(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]]));
+                // println!("{:?}", j);
+            }
+            if bat_list[j].len() == 3 {
+                // intCoords[i,j] = angleCalc(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]]);
+                frame_coords.push(calc_angle(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]]));
+            }
+            if bat_list[j].len() == 4 {
+                // intCoords[i,j] = torsionCalc(traj[i,bat_list[j][0]],traj[i,bat_list[j][1]],traj[i,bat_list[j][2]],traj[i,bat_list[j][3]])
+                frame_coords.push(calc_torsion(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]], traj[i][bat_list[j][3]]));
+            }
+        }
+        internal_coords.push(frame_coords);
+    }
+    // return intCoords
+    // println!("{:?}", internal_coords);
+    internal_coords
+}
