@@ -21,7 +21,7 @@ fn main() {
     const EULER: f64 = 0.57721566490153;
     // println!("Number of frames: {n_frames}");
     print!("{:?},", n_frames);
-    // println!("Number of internal coordinates: {degrees_freedom}");
+
     let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
     let two_d_constant: f64 = ((n_frames as f64)*std::f64::consts::PI).ln() + EULER;
     // println!("1D Constant: {one_d_constant}");
@@ -59,26 +59,9 @@ fn main() {
         .sum();  // Sum all partial sums from different threads
     let two_d_entropy: f64 = estimate_entropy(two_d_distances_total*2.0, n_frames, two_d_constant, two_d_degrees_freedom);
 
-    // // Trying to calculate mutual information
-    // let mut total_mutual_information: f64 = 0.0;
-    // for i in 0..degrees_freedom {
-    //     for j in (i+1)..degrees_freedom {
-    //         let entropy_2d: f64 = estimate_entropy(calc_two_d_nn(&one_d_data[i], &one_d_data[j])*2.0, n_frames, two_d_constant, 1);
-    //         let mutual_information = estimate_entropy(calc_one_d_nn(one_d_data[i].to_vec()), n_frames, one_d_constant, 1) +
-    //         estimate_entropy(calc_one_d_nn(one_d_data[j].to_vec()), n_frames, one_d_constant, 1)
-    //         - entropy_2d;
-    //         total_mutual_information += mutual_information;
-    //     }
-    // }
-    // let x: Vec<f64> = generate_normal(0.0, 1.57, n_frames);
-    // let y: Vec<f64> = generate_normal(0.0, 1.57, n_frames);
-    // // println!("{:?}", estimate_entropy(calc_one_d_nn(x.clone()), n_frames, one_d_constant, 1) +
-    //         estimate_entropy(calc_one_d_nn(x.clone()), n_frames, one_d_constant, 1)
-    //         - estimate_entropy(calc_two_d_nn(&x.clone(), x.clone())*2.0, n_frames, two_d_constant, 1));
     // println!("Total 2D entropy: {:?}", two_d_entropy);
     print!("{:?},", two_d_entropy);
     let total_entropy = two_d_entropy - ((degrees_freedom-2) as f64)*one_d_entropy;
-    // let total_entropy = one_d_entropy - total_mutual_information;
     // println!("Total entropy: {:?}", total_entropy);
     println!("{:?}", total_entropy);
 }
