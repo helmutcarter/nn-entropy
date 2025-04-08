@@ -32,6 +32,29 @@ pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
     distance_total
 }
 
+pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> f64 {
+    let mut unique_points = points.clone();
+    unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_points.dedup();
+    let mut unique_point_vec_array: Vec<[f64; 1]> = Vec::new();
+    for point in &unique_points {
+        unique_point_vec_array.push([*point])
+    }
+
+    let kdtree: ImmutableKdTree<f64, 1> = ImmutableKdTree::new_from_slice(&unique_point_vec_array);
+
+    // println!("{:?}", unique_points);
+    // let total_unique_points = unique_points.len();  
+    // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
+    let mut distance_total: f64 = 0.0;
+
+    for point in points {
+        let result: f64 = kdtree.nearest_n::<SquaredEuclidean>(&[point], NonZero::new(2).unwrap())[1].distance;
+        distance_total += result.sqrt().ln();
+    }
+    distance_total
+}
+
 pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> f64 {
     let mut points: Vec<[f64; 2]> = Vec::new();
     for (point_1, point_2) in points_1.into_iter().zip(points_2) {
