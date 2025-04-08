@@ -10,11 +10,10 @@ fn main() {
     // one_d_data = one_d_data[40..107].to_vec(); // bond angles only
 
     // Looking at only some frames to assess convergence
-    let mut one_d_data_short: Vec<Vec<f64>> = Vec::new();
-    for internal_coordinate in one_d_data {
-        one_d_data_short.push(internal_coordinate[..frames_end].to_vec());
-    }
-    one_d_data = one_d_data_short;
+    one_d_data = one_d_data
+        .into_iter()
+        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
+        .collect();
 
     let n_frames = one_d_data[0].len() as usize;
     
