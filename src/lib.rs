@@ -9,7 +9,6 @@ pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
     let mut unique_points = points.clone();
     unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
     unique_points.dedup();
-    // println!("{:?}", unique_points);
     let total_unique_points = unique_points.len();  
     // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
     let mut distance_total: f64 = 0.0;
