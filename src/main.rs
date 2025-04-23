@@ -3,8 +3,9 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let frames_end: usize = args[1].parse().unwrap();
-    let mut one_d_data: Vec<Vec<f64>> = load_one_d_data("/home/helmut/Downloads/JC_NN_Code_backup/2-methyl-hexane_unrestrained_1000000_ICs.csv");
+    let data_path: String = args[1].parse().unwrap();
+    let frames_end: usize = args[2].parse().unwrap();
+    let mut one_d_data: Vec<Vec<f64>> = load_one_d_data(&data_path);
     // one_d_data = one_d_data[(one_d_data.len()-66)..one_d_data.len()].to_vec(); // torsion angles only
     // one_d_data = one_d_data[..40].to_vec(); // bond lengths only
     // one_d_data = one_d_data[40..107].to_vec(); // bond angles only
