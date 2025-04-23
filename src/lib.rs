@@ -86,6 +86,7 @@ pub fn estimate_entropy(nn_distance: f64, n_frames: usize, constant: f64, n_inte
     (nn_distance/(n_frames as f64)) + constant*(n_internal_coords as f64)
 }
 pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
+    let mut all_data: Vec<Vec<f64>> = Vec::new();
     let file_result = File::open(file_path);
     let file = match file_result {
         Ok(file) => file,
@@ -100,7 +101,7 @@ pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
         },
     };
     let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(file);
-    let mut all_data: Vec<Vec<f64>> = Vec::new();
+    
     for result in reader.records() {
         let mut internal_coordinate_data: Vec<f64> = Vec::new();
         match result {
