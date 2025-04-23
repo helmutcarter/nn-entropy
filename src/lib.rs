@@ -1,5 +1,6 @@
 use kiddo::ImmutableKdTree;
 use kiddo::SquaredEuclidean;
+use std::error::Error;
 use std::num::NonZero;
 use std::fs::File;
 use std::io::ErrorKind;
