@@ -5,6 +5,52 @@ use std::num::NonZero;
 use std::fs::File;
 use std::io::ErrorKind;
 use rand_distr::{Normal, Distribution};
+use rayon::prelude::*;
+
+pub mod pyo3_api;
+pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> f64 {
+    let mut one_d_data = one_d_data
+        .into_iter()
+        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
+        .collect::<Vec<_>>();
+
+    let n_frames = one_d_data[0].len();
+    let degrees_freedom = one_d_data.len();
+
+    const EULER: f64 = 0.57721566490153;
+    let one_d_constant = ((n_frames as f64) * 2.0).ln() + EULER;
+    let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+
+    let one_d_distances_total: f64 = one_d_data
+        .iter()
+        .map(|ic| calc_one_d_nn(ic.clone()))
+        .sum();
+
+    let one_d_entropy =
+        estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
+
+    let two_d_degrees_freedom = (0..degrees_freedom)
+        .flat_map(|i| (i + 1)..degrees_freedom)
+        .count();
+
+    let two_d_distances_total: f64 = (0..degrees_freedom)
+        .into_par_iter()
+        .map(|i| {
+            (i + 1..degrees_freedom)
+                .map(|j| calc_two_d_nn(&one_d_data[i], &one_d_data[j]))
+                .sum::<f64>()
+        })
+        .sum();
+
+    let two_d_entropy = estimate_entropy(
+        two_d_distances_total * 2.0,
+        n_frames,
+        two_d_constant,
+        two_d_degrees_freedom,
+    );
+
+    two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy
+}
 
 pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
     let mut unique_points = points.clone();
