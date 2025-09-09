@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "nn_entropy"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rstest = "0.25"
