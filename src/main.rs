@@ -34,7 +34,7 @@ fn main() {
 
     let one_d_entropy: f64 = estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
     // println!("Total 1D entropy: {:?}", one_d_entropy);
-    print!("{:?},", one_d_entropy);
+    // print!("{:?},", one_d_entropy);
 
     // 2D distance calculation
     let mut two_d_degrees_freedom: usize = 0;
@@ -61,7 +61,7 @@ fn main() {
     let two_d_entropy: f64 = estimate_entropy(two_d_distances_total*2.0, n_frames, two_d_constant, two_d_degrees_freedom);
 
     // println!("Total 2D entropy: {:?}", two_d_entropy);
-    print!("{:?},", two_d_entropy);
+    // print!("{:?},", two_d_entropy);
     let total_entropy = two_d_entropy - ((degrees_freedom-2) as f64)*one_d_entropy;
     // println!("Total entropy: {:?}", total_entropy);
     println!("{:?}", total_entropy);
