@@ -319,7 +319,7 @@ pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>)
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-
+#[allow(dead_code)]
 fn get_atom_count(parm_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
     let file = File::open(parm_path)?;
     let reader = BufReader::new(file);
@@ -362,6 +362,7 @@ fn get_atom_count(parm_path: &str) -> Result<usize, Box<dyn std::error::Error>> 
     Err("Could not find POINTERS section or valid first number".into())
 }
 
+#[allow(dead_code)]
 fn parse_bond_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<[usize; 2]>, Box<dyn Error>> {
     let file = File::open(parm_path)?;
     let reader = BufReader::new(file);
@@ -402,6 +403,7 @@ fn parse_bond_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<[usiz
     Ok(output) 
 }
 
+#[allow(dead_code)]
 fn parse_atom_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<String>, Box<dyn Error>> {
     let file = File::open(parm_path)?;
     let reader = BufReader::new(file);
@@ -447,6 +449,7 @@ fn parse_atom_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<Strin
 }
 // Doing things this way not because it makes sense but because it matches Joe Cruz's python code
 // It may make sense though. I don't know enough about rust to say for sure.
+#[allow(dead_code)]
 struct Molecule {
     atoms: Vec<String>, // I think we don't actually strictly need this? Maybe later?
     atom_count: usize,
