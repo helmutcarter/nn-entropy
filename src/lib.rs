@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 pub mod pyo3_api;
 pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> f64 {
-    let mut one_d_data = one_d_data
+    let one_d_data = one_d_data
         .into_iter()
         .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
         .collect::<Vec<_>>();
@@ -53,13 +53,12 @@ pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize)
 }
 
 pub fn estimate_coordinate_entropy_rust(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> Vec<f64> {
-    let mut one_d_data = one_d_data
+    let one_d_data = one_d_data
         .into_iter()
         .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
         .collect::<Vec<_>>();
 
     let n_frames: usize = one_d_data[0].len();
-    let degrees_freedom: usize = one_d_data.len();
 
     const EULER: f64 = 0.57721566490153;
     let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
