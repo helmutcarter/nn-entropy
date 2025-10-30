@@ -318,7 +318,6 @@ pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>)
 }
 
 use std::io::{BufRead, BufReader};
-use std::path::Path;
 #[allow(dead_code)]
 fn get_atom_count(parm_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
     let file = File::open(parm_path)?;
