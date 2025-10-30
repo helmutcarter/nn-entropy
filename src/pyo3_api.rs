@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 use crate::calculate_entropy_from_data;
 use crate::estimate_coordinate_entropy_rust;
 use crate::estimate_coordinate_mutual_information_rust;
-use nn_entropy::*;
 
 /// Python wrapper around the main entropy function
 #[pyfunction]
