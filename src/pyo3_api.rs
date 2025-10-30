@@ -33,7 +33,7 @@ fn estimate_coordinate_mutual_information(data: PyReadonlyArray2<f64>) -> PyResu
 }
 
 #[pymodule]
-fn nn_entropy(_py: Python, m: &PyModule) -> PyResult<()> {
+fn nn_entropy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_mie_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_coordinate_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_coordinate_mutual_information, m)?)?;
