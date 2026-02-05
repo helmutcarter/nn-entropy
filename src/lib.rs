@@ -161,8 +161,8 @@ pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> f64 {
 }
 
 pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> f64 {
-    let mut points: Vec<[f64; 2]> = Vec::new();
-    for (point_1, point_2) in points_1.into_iter().zip(points_2) {
+    let mut points: Vec<[f64; 2]> = Vec::with_capacity(points_1.len());
+    for (point_1, point_2) in points_1.iter().zip(points_2) {
         points.push([*point_1, *point_2]);
     }
 
