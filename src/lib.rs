@@ -22,8 +22,8 @@ pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize)
     let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
 
     let one_d_distances_total: f64 = one_d_data
-        .iter()
-        .map(|ic| calc_one_d_nn(ic.clone()))
+        .par_iter()
+        .map(|ic| calc_one_d_nn(ic))
         .sum();
 
     let one_d_entropy =
@@ -64,8 +64,8 @@ pub fn estimate_coordinate_entropy_rust(one_d_data: Vec<Vec<f64>>, frames_end: u
     let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
 
     let one_d_distances: Vec<f64> = one_d_data
-        .iter()
-        .map(|ic| calc_one_d_nn(ic.clone()))
+        .par_iter()
+        .map(|ic| calc_one_d_nn(ic))
         .collect();
 
     let one_d_entropies: Vec<f64> = one_d_distances
@@ -111,8 +111,8 @@ pub fn estimate_coordinate_mutual_information_rust(one_d_data: Vec<Vec<f64>>, fr
     two_d_entropies
 }
 
-pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
-    let mut unique_points = points.clone();
+pub fn calc_one_d_nn(points: &[f64]) -> f64 {
+    let mut unique_points = points.to_vec();
     unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
     unique_points.dedup();
     let total_unique_points = unique_points.len();  
@@ -121,18 +121,18 @@ pub fn calc_one_d_nn(points: Vec<f64>) -> f64 {
 
     for point in points 
     {    
-        let index = unique_points.binary_search_by(|probe| probe.total_cmp(&point)).unwrap();
+        let index = unique_points.binary_search_by(|probe| probe.total_cmp(point)).unwrap();
         if index == 0 {
-            distance_total += f64::min(distance(point, unique_points[total_unique_points-1]),
-                            distance(point, unique_points[index+1])).ln();
+            distance_total += f64::min(distance(*point, unique_points[total_unique_points-1]),
+                            distance(*point, unique_points[index+1])).ln();
         }
         else if index == total_unique_points-1 {
-            distance_total += f64::min(distance(point, unique_points[index-1]),
-                            distance(point, unique_points[0])).ln(); 
+            distance_total += f64::min(distance(*point, unique_points[index-1]),
+                            distance(*point, unique_points[0])).ln(); 
         }
         else {
-            distance_total += f64::min(distance(point, unique_points[index-1]),
-                            distance(point, unique_points[index+1])).ln();
+            distance_total += f64::min(distance(*point, unique_points[index-1]),
+                            distance(*point, unique_points[index+1])).ln();
                         }}
     distance_total
 }
@@ -474,4 +474,3 @@ struct Molecule {
 //         Ok(molecule)
 //     }
 // }
-
