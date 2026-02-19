@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 
-use bat_library::InternalCoordinates;
+use nn_entropy::bat_library::InternalCoordinates;
 use nn_entropy::calculate_entropy_from_data;
 
 fn main() {

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use bat_library::InternalCoordinates;
+use nn_entropy::bat_library::InternalCoordinates;
 use nn_entropy::calculate_entropy_from_data;
 
 fn test_data_path(rel: &str) -> PathBuf {
@@ -9,8 +9,8 @@ fn test_data_path(rel: &str) -> PathBuf {
 
 #[test]
 fn entropy_matches_reference_for_test_fixture() {
-    let top = test_data_path("../bat_library/test.parm7");
-    let traj = test_data_path("../bat_library/test.nc");
+    let top = test_data_path("tests/fixtures/test.parm7");
+    let traj = test_data_path("tests/fixtures/test.nc");
     let frames = usize::MAX;
 
     let mut internal =
@@ -40,8 +40,8 @@ fn entropy_matches_reference_for_test_fixture() {
 
 #[test]
 fn torsions_only_entropy_matches_reference_for_test_fixture() {
-    let top = test_data_path("../bat_library/test.parm7");
-    let traj = test_data_path("../bat_library/test.nc");
+    let top = test_data_path("tests/fixtures/test.parm7");
+    let traj = test_data_path("tests/fixtures/test.nc");
     let frames = usize::MAX;
 
     let mut internal =

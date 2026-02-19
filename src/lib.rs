@@ -7,6 +7,7 @@ use std::io::ErrorKind;
 use rand_distr::{Normal, Distribution};
 use rayon::prelude::*;
 
+pub mod bat_library;
 pub mod pyo3_api;
 pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> f64 {
     let one_d_data = one_d_data
