@@ -17,7 +17,8 @@ fn estimate_mie_entropy(data: PyReadonlyArray2<f64>) -> PyResult<f64> {
     let array = data.as_array();
     let one_d_data: Vec<Vec<f64>> = array.outer_iter().map(|row| row.to_vec()).collect();
     let frames_end = array.shape()[1]; // use all frames
-    Ok(calculate_entropy_from_data(one_d_data, frames_end))
+    calculate_entropy_from_data(one_d_data, frames_end)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 // Create python wrapper to take BAT coordinates and return a numpy array with an entropy for each coordinate
@@ -27,7 +28,8 @@ fn estimate_coordinate_entropy(data: PyReadonlyArray2<f64>) -> PyResult<Vec<f64>
     let one_d_data: Vec<Vec<f64>> = array.outer_iter().map(|row| row.to_vec()).collect();
     let frames_end = array.shape()[1]; // use all frames
 
-    Ok(estimate_coordinate_entropy_rust(one_d_data, frames_end))
+    estimate_coordinate_entropy_rust(one_d_data, frames_end)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 // Create python wrapper to take BAT coordinates and return a numpy array with the mutual information for each coordinate pair
@@ -36,7 +38,8 @@ fn estimate_coordinate_mutual_information(data: PyReadonlyArray2<f64>) -> PyResu
     let array = data.as_array();
     let one_d_data: Vec<Vec<f64>> = array.outer_iter().map(|row| row.to_vec()).collect();
     let frames_end = array.shape()[1]; // use all frames
-    Ok(estimate_coordinate_mutual_information_rust(one_d_data, frames_end))
+    estimate_coordinate_mutual_information_rust(one_d_data, frames_end)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Python wrapper to read .parm7 + .nc and compute entropy directly
@@ -79,7 +82,8 @@ fn estimate_mie_entropy_from_files(
     }
 
     let used_frames = one_d_data[0].len();
-    Ok(calculate_entropy_from_data(one_d_data, used_frames))
+    calculate_entropy_from_data(one_d_data, used_frames)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 #[pymodule]
