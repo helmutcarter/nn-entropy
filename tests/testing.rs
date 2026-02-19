@@ -47,17 +47,6 @@ pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     (0..size).map(|_| normal.sample(&mut rng)).collect()
 }
 
-// #[test]
-// fn test_one_d_nn_gaussian() {
-//     let n_points: f64 = 100000000.0;
-//     let coord = generate_normal(0.0, 1.57, n_points as usize);
-//     let expected_value: f64 = -n_points*n_points.ln() + 0.0997*n_points;
-
-//     let ln_distance = calc_one_d_nn(coord);
-
-//     assert_approx_eq!(ln_distance, expected_value);
-// }
-
 // Helper function to compare floating-point arrays with tolerance
 fn assert_approx_eq_array(a: [f64; 3], b: [f64; 3]) {
     let epsilon = 1e-10;
