@@ -35,7 +35,6 @@ cargo run -- <path_to_parm7> <path_to_nc> --torsions-only
 Notes:
 - `--frames` and `--stop` are mutually exclusive in practice; both limit the number of frames read.
 - `--start` skips initial frames after reading.
-- `--python` runs a legacy Python script at `/gibbs/helmut/code/python_scripts/NN_entropy_calc_rusty.py`.
 
 ## Rust library usage
 
