@@ -17,19 +17,19 @@ This crate provides non-parametric entropy estimation using the nearest neighbor
 ## Build
 
 ```bash
-cargo build
+cargo build --release
 ```
 
 ## CLI usage
 
 ```bash
-cargo run -- <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] 
+cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] 
 ```
 
 Example:
 
 ```bash
-cargo run -- <path_to_parm7> <path_to_nc> --torsions-only
+cargo run --release <path_to_parm7> <path_to_nc> --torsions-only
 ```
 
 Notes:
@@ -60,13 +60,13 @@ The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) wi
 A typical build workflow uses `maturin`:
 
 ```bash
-maturin develop
+maturin develop --release
 ```
 
 ## Tests
 
 ```bash
-cargo test
+cargo test --release
 ```
 
 ## Project layout
