@@ -25,6 +25,13 @@ fn test_one_d_nn_real_data_with_repeats() {
 }
 
 #[test]
+fn test_one_d_nn_constant_series_is_invalid() {
+    let coord: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0];
+    let err = calc_one_d_nn(&coord).expect_err("expected error for constant series");
+    assert!(err.contains("unique"));
+}
+
+#[test]
 fn test_two_d_nn_real_data() {
     let coord_1: Vec<f64> = vec![1.32254237, 1.34113319, 1.38538372, 1.37740432, 1.38594803, 1.32188178, 1.37434198, 1.35183515, 1.29332546, 1.3097266];
     let coord_2: Vec<f64> = vec![1.29885442, 1.33961716, 1.3461671, 1.35140196, 1.33317387, 1.32170911, 1.33895471, 1.3128584, 1.39146681, 1.31523388];
