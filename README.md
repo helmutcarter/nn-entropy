@@ -29,7 +29,7 @@ cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [
 Example:
 
 ```bash
-cargo run --release <path_to_parm7> <path_to_nc> --torsions-only
+cargo run --release <path_to_parm7> <path_to_nc>
 ```
 
 Notes:
