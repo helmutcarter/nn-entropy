@@ -23,7 +23,7 @@ cargo build
 ## CLI usage
 
 ```bash
-cargo run -- <path_to_parm7> <path_to_nc> [--torsions-only] [--frames N] [--start N] [--stop N] [--python]
+cargo run -- <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--python]
 ```
 
 Example:
@@ -33,8 +33,8 @@ cargo run -- <path_to_parm7> <path_to_nc> --torsions-only
 ```
 
 Notes:
-- `--frames` and `--stop` are mutually exclusive in practice; both limit the number of frames read.
-- `--start` skips initial frames after reading.
+- `--stop` limits the number of frames read.
+- `--start` skips the first N frames
 
 ## Rust library usage
 

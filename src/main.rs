@@ -8,7 +8,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--frames N] [--start N] [--stop N]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N]",
             args[0]
         );
         std::process::exit(1);
@@ -17,7 +17,6 @@ fn main() {
     let traj_path = Path::new(&args[2]);
 
     let mut torsions_only = false;
-    let mut frames: Option<usize> = None;
     let mut start: Option<usize> = None;
     let mut stop: Option<usize> = None;
     let mut use_python = false;
@@ -27,18 +26,6 @@ fn main() {
             "--torsions-only" => {
                 torsions_only = true;
                 i += 1;
-            }
-            "--frames" => {
-                if i + 1 >= args.len() {
-                    eprintln!("--frames requires a value");
-                    std::process::exit(1);
-                }
-                frames = Some(
-                    args[i + 1]
-                        .parse::<usize>()
-                        .expect("invalid --frames value"),
-                );
-                i += 2;
             }
             "--start" => {
                 if i + 1 >= args.len() {
@@ -81,8 +68,7 @@ fn main() {
             std::process::exit(1);
         }
         let script = "/gibbs/helmut/code/python_scripts/NN_entropy_calc_rusty.py";
-        let frame_arg = frames
-            .or(stop)
+        let frame_arg = stop
             .map(|v| v.to_string())
             .unwrap_or_else(|| "-1".to_string());
         let output = std::process::Command::new("python")
@@ -111,11 +97,7 @@ fn main() {
     let mut internal = InternalCoordinates::new(top_path)
         .expect("failed to build BAT list from topology");
     internal
-        .calculate_internal_coords(
-            traj_path,
-            frames.or(stop).unwrap_or(usize::MAX),
-            torsions_only,
-        )
+        .calculate_internal_coords(traj_path, stop.unwrap_or(usize::MAX), torsions_only)
         .expect("failed to read trajectory or compute BAT coordinates");
 
     let frames = internal.int_coords.len();
