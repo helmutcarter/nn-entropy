@@ -42,7 +42,7 @@ Notes:
 use nn_entropy::calculate_entropy_from_data;
 
 // one_d_data is Vec<Vec<f64>> with shape [n_coords][n_frames]
-let entropy = calculate_entropy_from_data(one_d_data, frames_end);
+let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
 ```
 
 Other helpers:
