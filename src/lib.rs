@@ -1,6 +1,5 @@
 use kiddo::ImmutableKdTree;
 use kiddo::SquaredEuclidean;
-use std::error::Error;
 use std::num::NonZero;
 use std::fs::File;
 use std::io::ErrorKind;
@@ -362,190 +361,23 @@ pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>)
     let n_frames: usize = traj.len();
     let n_int_coords: usize = bat_list.len();
 
-    // intCoords = np.empty((frameNumber,intCoordNumber))
     let mut internal_coords: Vec<Vec<f64>> = Vec::new();
 
-    // for i in range(frameNumber):
     for i in 0..n_frames as usize {
         let mut frame_coords: Vec<f64> = Vec::new();
-        // for j in range(intCoordNumber):
         for j in 0..n_int_coords as usize {
             if bat_list[j].len() == 2 {
-                // intCoords[i,j] = bondCalc(traj[i,bat_list[j][0]],traj[i,bat_list[j][1]])
                 frame_coords.push(calc_bond(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]]));
                 // println!("{:?}", j);
             }
             if bat_list[j].len() == 3 {
-                // intCoords[i,j] = angleCalc(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]]);
                 frame_coords.push(calc_angle(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]]));
             }
             if bat_list[j].len() == 4 {
-                // intCoords[i,j] = torsionCalc(traj[i,bat_list[j][0]],traj[i,bat_list[j][1]],traj[i,bat_list[j][2]],traj[i,bat_list[j][3]])
                 frame_coords.push(calc_torsion(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]], traj[i][bat_list[j][3]]));
             }
         }
         internal_coords.push(frame_coords);
     }
-    // return intCoords
-    // println!("{:?}", internal_coords);
     internal_coords
 }
-
-use std::io::{BufRead, BufReader};
-#[allow(dead_code)]
-fn get_atom_count(parm_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
-    let file = File::open(parm_path)?;
-    let reader = BufReader::new(file);
-
-    let mut found_pointers = false;
-    let mut in_pointers = false;
-
-    for line in reader.lines() {
-        let line = line?;
-
-        if line.starts_with("%FLAG POINTERS") {
-            found_pointers = true;
-            continue;
-        }
-
-        if found_pointers {
-            if line.starts_with("%FORMAT") {
-                in_pointers = true;
-                continue;
-            }
-
-            if in_pointers {
-                // Stop if we hit the next section
-                if line.starts_with("%FLAG") {
-                    break;
-                }
-
-                // Process the first valid line of data
-                let first_number = line.chars()
-                    .take(8)  // First 8-character field
-                    .collect::<String>()
-                    .trim()
-                    .parse::<usize>()?;
-                
-                return Ok(first_number);
-            }
-        }
-    }
-
-    Err("Could not find POINTERS section or valid first number".into())
-}
-
-#[allow(dead_code)]
-fn parse_bond_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<[usize; 2]>, Box<dyn Error>> {
-    let file = File::open(parm_path)?;
-    let reader = BufReader::new(file);
-    let query_section: &str = if include_hydrogens { 
-        "%FLAG BONDS_INC_HYDROGEN" 
-    } else { 
-        "%FLAG BONDS_WITHOUT_HYDROGEN" 
-    };
-    let mut found_flag: bool = false;
-    let mut in_flag:bool = false;
-    let mut output: Vec<[usize; 2]> = Vec::new();
-
-    for line in reader.lines() {
-        let line = line?;
-            if line.starts_with(query_section) {
-            found_flag = true;
-            continue;
-        }
-
-        if found_flag {
-            if line.starts_with("%FORMAT") {
-                in_flag = true;
-                continue;
-            }
-
-            if in_flag {
-                // Stop if we hit the next section
-                if line.starts_with("%FLAG") {
-                    break;
-                }
-                let data: Vec<usize> = line.split_ascii_whitespace().map(|x: &str| x.parse::<usize>().unwrap()).collect();
-                for chunk in data.chunks(3) {
-                    output.push([chunk[0], chunk[1]])
-                }
-            }
-        }
-    }
-    Ok(output) 
-}
-
-#[allow(dead_code)]
-fn parse_atom_data(parm_path: &str, include_hydrogens: bool) -> Result<Vec<String>, Box<dyn Error>> {
-    let file = File::open(parm_path)?;
-    let reader = BufReader::new(file);
-    let query_section: &str = "ATOM_NAME";
-    let mut found_flag: bool = false;
-    let mut in_flag:bool = false;
-    let mut output: Vec<String> = Vec::new();
-
-    for line in reader.lines() {
-        let line = line?;
-            if line.starts_with(query_section) {
-            found_flag = true;
-            continue;
-        }
-
-        if found_flag {
-            if line.starts_with("%FORMAT") {
-                in_flag = true;
-                continue;
-            }
-
-            if in_flag {
-                // Stop if we hit the next section
-                if line.starts_with("%FLAG") {
-                    break;
-                }
-                output = if include_hydrogens { 
-                    line.split_ascii_whitespace()
-                        .filter(|x| x.starts_with("H"))
-                        .map(|x| x.to_string())
-                        .collect()
-                } else { 
-                    line.split_ascii_whitespace()
-                        .filter(|x| !x.starts_with("H"))
-                        .map(|x| x.to_string())
-                        .collect()
-                };
-                }
-            }
-        }
-    
-    Ok(output) 
-}
-// Doing things this way not because it makes sense but because it matches Joe Cruz's python code
-// It may make sense though. I don't know enough about rust to say for sure.
-#[allow(dead_code)]
-struct Molecule {
-    atoms: Vec<String>, // I think we don't actually strictly need this? Maybe later?
-    atom_count: usize,
-    hydrogens: Vec<String>,
-    int_coord_list: Vec<Vec<usize>>,
-    torsion_count: usize,
-    int_coords_count: usize,
-    bonds_with_hydrogens: Vec<[usize; 2]>,
-    bonds_without_hydrogens: Vec<[usize; 2]>,
-}
-
-// impl Molecule {
-//     fn new(topology_file: &str, trajectory_file: &str,) -> Result<Self, Box<dyn Error>> {
-//         let molecule = Molecule{
-//             atoms: parse_atom_data(&topology_file, false)?,
-//             atom_count:  get_atom_count(&topology_file)?,
-//             hydrogens: parse_atom_data(&topology_file, true)?,
-//             int_coord_list: int_coord_list,
-//             torsion_count: torsion_count,
-//             int_coords_count: int_coords_count,
-//             bonds_with_hydrogens: parse_bond_data(&topology_file, true)?,
-//             bonds_without_hydrogens: parse_bond_data(&topology_file, false)?,
-//         };
-//         Ok(molecule)
-//     }
-// }
