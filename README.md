@@ -1,8 +1,8 @@
 # nn-entropy
 
-Nearest-neighbor entropy estimation for internal coordinates, with a Rust library, CLI, and Python bindings.
+Estimate the configurational entropy of a molecular system, with a Rust library, CLI, and Python bindings.
 
-This crate provides non-parametric entropy estimation using the nearest neighbor method with first order mutual information expansion on internal coordinate time series (e.g., molecular bonds, angles, and torsions converted from MD trajectory files).
+This crate provides non-parametric entropy estimation using the nearest neighbor method with first order mutual information expansion on internal coordinates (i.e., bonds lengths, bond angles, and torsion angles) and conversion from MD trajectory files.
 
 ## Features
 - Rust library API for first order entropy, per-coordinate entropy, and mutual information estimates.
