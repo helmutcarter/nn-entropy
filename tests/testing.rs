@@ -2,9 +2,6 @@ use nn_entropy::*;
 use assert_approx_eq::assert_approx_eq;
 use rand_distr::{Normal, Distribution};
 
-// const _test_data: [f64; 6] = [1.2, 6.2, 1.2, 1.0, 1.33, 6.9];
-
-
 #[test]
 fn test_one_d_nn_real_data() {
     let coord = vec![1.50252827, 1.56517294, 1.53902767, 1.55957774, 1.50624973, 1.53406964, 1.55834527, 1.54724624, 1.57642681, 1.59808848];
