@@ -8,7 +8,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--frames N] [--start N] [--stop N] [--python]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--frames N] [--start N] [--stop N]",
             args[0]
         );
         std::process::exit(1);
@@ -76,6 +76,10 @@ fn main() {
     }
 
     if use_python {
+        if !cfg!(debug_assertions) {
+            eprintln!("--python is only available in debug builds.");
+            std::process::exit(1);
+        }
         let script = "/gibbs/helmut/code/python_scripts/NN_entropy_calc_rusty.py";
         let frame_arg = frames
             .or(stop)
