@@ -78,4 +78,4 @@ cargo test --release
 
 ## License
 
-No license specified yet.
+© 2026 Helmut Carter, Kurtzman Lab. All rights reserved.
