@@ -2,7 +2,7 @@
 
 Estimate the configurational entropy of a molecular system, with a Rust library, CLI, and Python bindings.
 
-This crate provides non-parametric entropy estimation using the nearest neighbor method with first order mutual information expansion on internal coordinates (i.e., bonds lengths, bond angles, and torsion angles) and conversion from MD trajectory files.
+This crate provides non-parametric entropy estimation using the nearest neighbor method with first order mutual information expansion on internal coordinates (i.e., bonds lengths, bond angles, and torsion angles) with built-in conversion from MD trajectory files.
 
 ## Features
 - Rust library API for first order entropy, per-coordinate entropy, and mutual information estimates.
