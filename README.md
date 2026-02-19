@@ -76,6 +76,11 @@ cargo test --release
 - `src/pyo3_api.rs`: Python bindings.
 - `tests/`: unit and regression tests.
 
+## Further Reading
+- [Extraction of configurational entropy from molecular simulations via an expansion approximation](https://pubmed.ncbi.nlm.nih.gov/17640119/)
+- [Sample Estimate of the Entropy of a Random Vector](https://dmitripavlov.org/scans/kozachenko-leonenko.pdf)
+- [Grid inhomogeneous solvation theory: Hydration structure and thermodynamics of the miniature receptor cucurbit[7]uril](https://pmc.ncbi.nlm.nih.gov/articles/PMC3416872/)
+
 ## License
 
 © 2026 Helmut Carter, Kurtzman Lab. All rights reserved.
