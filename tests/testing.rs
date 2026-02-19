@@ -10,7 +10,7 @@ fn test_one_d_nn_real_data() {
     let coord = vec![1.50252827, 1.56517294, 1.53902767, 1.55957774, 1.50624973, 1.53406964, 1.55834527, 1.54724624, 1.57642681, 1.59808848];
     let expected_value: f64 = -53.50470139636346; // Value from rust
     
-    let ln_distance = calc_one_d_nn(coord);
+    let ln_distance = calc_one_d_nn(&coord);
     assert_approx_eq!(ln_distance, expected_value, 5e-2);
 }
 
@@ -19,7 +19,7 @@ fn test_one_d_nn_real_data_with_repeats() {
     let coord: Vec<f64> = vec![1.50252827, 1.50252827, 1.50252827, 1.50252827, 1.50252827, 1.2];
     let expected_value: f64 = -7.173483307994341; // Value from rust
 
-    let ln_distance: f64 = calc_one_d_nn(coord);
+    let ln_distance: f64 = calc_one_d_nn(&coord);
 
     assert_approx_eq!(ln_distance, expected_value);
 }
