@@ -33,7 +33,7 @@ cargo run --release <path_to_parm7> <path_to_nc>
 ```
 
 Notes:
-- `--stop` limits the number of frames read.
+- `--stop` limits the number of frames read to N.
 - `--start` skips the first N frames
 
 ## Rust library usage
