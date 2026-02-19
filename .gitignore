@@ -2,3 +2,4 @@
 .~lock.1D_distances_1k.txt#
 *.csv
 *.txt
+*.code-workspace
