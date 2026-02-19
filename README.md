@@ -71,7 +71,7 @@ cargo test --release
 
 ## Project layout
 - `src/lib.rs`: core entropy estimation and internal coordinate utilities.
-- `src/bat_library/`: BAT list builder and NetCDF reader for `.parm7` + `.nc`.
+- `src/bat_library/`: NetCDF reader for `.parm7` + `.nc` and internal coordinate (BAT) conversion.
 - `src/main.rs`: CLI entry point.
 - `src/pyo3_api.rs`: Python bindings.
 - `tests/`: unit and regression tests.
