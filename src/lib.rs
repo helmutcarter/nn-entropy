@@ -9,7 +9,42 @@ use rayon::prelude::*;
 
 pub mod bat_library;
 pub mod pyo3_api;
-pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> f64 {
+
+fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(), String> {
+    if one_d_data.is_empty() {
+        return Err("no coordinate data provided".to_string());
+    }
+    if frames_end < 2 {
+        return Err("need at least two frames for entropy estimation".to_string());
+    }
+    for (idx, coord) in one_d_data.iter().enumerate() {
+        if coord.len() < frames_end {
+            return Err(format!(
+                "coordinate {idx} has {} frames, expected at least {frames_end}",
+                coord.len()
+            ));
+        }
+        let slice = &coord[..frames_end];
+        if slice.iter().any(|v| !v.is_finite()) {
+            return Err(format!("coordinate {idx} contains non-finite values"));
+        }
+        let mut unique = slice.to_vec();
+        unique.sort_by(|a, b| a.total_cmp(b));
+        unique.dedup();
+        if unique.len() < 2 {
+            return Err(format!(
+                "coordinate {idx} must contain at least two unique values"
+            ));
+        }
+    }
+    Ok(())
+}
+pub fn calculate_entropy_from_data(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+) -> Result<f64, String> {
+    validate_one_d_data(&one_d_data, frames_end)?;
+
     let one_d_data = one_d_data
         .into_iter()
         .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
@@ -24,8 +59,8 @@ pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize)
 
     let one_d_distances_total: f64 = one_d_data
         .par_iter()
-        .map(|ic| calc_one_d_nn(ic))
-        .sum();
+        .try_fold(|| 0.0, |acc, ic| Ok::<f64, String>(acc + calc_one_d_nn(ic)?))
+        .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
     let one_d_entropy =
         estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
@@ -36,12 +71,14 @@ pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize)
 
     let two_d_distances_total: f64 = (0..degrees_freedom)
         .into_par_iter()
-        .map(|i| {
-            (i + 1..degrees_freedom)
-                .map(|j| calc_two_d_nn(&one_d_data[i], &one_d_data[j]))
-                .sum::<f64>()
+        .try_fold(|| 0.0, |acc, i| {
+            let mut sum = 0.0;
+            for j in (i + 1)..degrees_freedom {
+                sum += calc_two_d_nn(&one_d_data[i], &one_d_data[j])?;
+            }
+            Ok::<f64, String>(acc + sum)
         })
-        .sum();
+        .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
     let two_d_entropy = estimate_entropy(
         two_d_distances_total * 2.0,
@@ -50,10 +87,15 @@ pub fn calculate_entropy_from_data(one_d_data: Vec<Vec<f64>>, frames_end: usize)
         two_d_degrees_freedom,
     );
 
-    two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy
+    Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy)
 }
 
-pub fn estimate_coordinate_entropy_rust(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> Vec<f64> {
+pub fn estimate_coordinate_entropy_rust(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+) -> Result<Vec<f64>, String> {
+    validate_one_d_data(&one_d_data, frames_end)?;
+
     let one_d_data = one_d_data
         .into_iter()
         .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
@@ -66,18 +108,29 @@ pub fn estimate_coordinate_entropy_rust(one_d_data: Vec<Vec<f64>>, frames_end: u
 
     let one_d_distances: Vec<f64> = one_d_data
         .par_iter()
-        .map(|ic| calc_one_d_nn(ic))
-        .collect();
+        .try_fold(Vec::new, |mut acc, ic| {
+            acc.push(calc_one_d_nn(ic)?);
+            Ok::<Vec<f64>, String>(acc)
+        })
+        .try_reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            Ok::<Vec<f64>, String>(a)
+        })?;
 
     let one_d_entropies: Vec<f64> = one_d_distances
         .iter()
         .map(|&distance| estimate_entropy(distance, n_frames, one_d_constant, 1))
         .collect();
 
-    one_d_entropies
+    Ok(one_d_entropies)
 }
 
-pub fn estimate_coordinate_mutual_information_rust(one_d_data: Vec<Vec<f64>>, frames_end: usize) -> Vec<f64> {
+pub fn estimate_coordinate_mutual_information_rust(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+) -> Result<Vec<f64>, String> {
+    validate_one_d_data(&one_d_data, frames_end)?;
+
     let one_d_data = one_d_data
         .into_iter()
         .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
@@ -95,13 +148,16 @@ pub fn estimate_coordinate_mutual_information_rust(one_d_data: Vec<Vec<f64>>, fr
 
     let two_d_distances: Vec<f64> = (0..degrees_freedom)
         .into_par_iter()
-        .flat_map(|i| {
-            (i + 1..degrees_freedom)
-                // .into_par_iter()
-                .map(|j| calc_two_d_nn(&one_d_data[i], &one_d_data[j]))
-                .collect::<Vec<f64>>()
+        .try_fold(Vec::new, |mut acc, i| {
+            for j in (i + 1)..degrees_freedom {
+                acc.push(calc_two_d_nn(&one_d_data[i], &one_d_data[j])?);
+            }
+            Ok::<Vec<f64>, String>(acc)
         })
-        .collect();
+        .try_reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            Ok::<Vec<f64>, String>(a)
+        })?;
 
     assert_eq!(two_d_distances.len(), two_d_degrees_freedom); // Just to be safe
 
@@ -109,20 +165,25 @@ pub fn estimate_coordinate_mutual_information_rust(one_d_data: Vec<Vec<f64>>, fr
         .iter()
         .map(|&distance| estimate_entropy(distance * 2.0, n_frames, two_d_constant, 1))
         .collect();
-    two_d_entropies
+    Ok(two_d_entropies)
 }
 
-pub fn calc_one_d_nn(points: &[f64]) -> f64 {
+pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
     let mut unique_points = points.to_vec();
-    unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_points.sort_by(|a, b| a.total_cmp(b));
     unique_points.dedup();
     let total_unique_points = unique_points.len();  
+    if total_unique_points < 2 {
+        return Err("coordinate series must contain at least two unique values".to_string());
+    }
     // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
     let mut distance_total: f64 = 0.0;
 
     for point in points 
     {    
-        let index = unique_points.binary_search_by(|probe| probe.total_cmp(point)).unwrap();
+        let index = unique_points.binary_search_by(|probe| probe.total_cmp(point)).map_err(|_| {
+            "coordinate value not found in unique list; input may contain NaN".to_string()
+        })?;
         if index == 0 {
             distance_total += f64::min(distance(*point, unique_points[total_unique_points-1]),
                             distance(*point, unique_points[index+1])).ln();
@@ -135,13 +196,16 @@ pub fn calc_one_d_nn(points: &[f64]) -> f64 {
             distance_total += f64::min(distance(*point, unique_points[index-1]),
                             distance(*point, unique_points[index+1])).ln();
                         }}
-    distance_total
+    Ok(distance_total)
 }
 
-pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> f64 {
+pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
     let mut unique_points = points.clone();
-    unique_points.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_points.sort_by(|a, b| a.total_cmp(b));
     unique_points.dedup();
+    if unique_points.len() < 2 {
+        return Err("coordinate series must contain at least two unique values".to_string());
+    }
     let mut unique_point_vec_array: Vec<[f64; 1]> = Vec::new();
     for point in &unique_points {
         unique_point_vec_array.push([*point])
@@ -155,28 +219,38 @@ pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> f64 {
     let mut distance_total: f64 = 0.0;
 
     for point in points {
-        let result: f64 = kdtree.nearest_n::<SquaredEuclidean>(&[point], NonZero::new(2).unwrap())[1].distance;
+        let result: f64 =
+            kdtree.nearest_n::<SquaredEuclidean>(&[point], NonZero::new(2).unwrap())[1].distance;
         distance_total += result.sqrt().ln();
     }
-    distance_total
+    Ok(distance_total)
 }
 
-pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> f64 {
+pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, String> {
     let mut points: Vec<[f64; 2]> = Vec::with_capacity(points_1.len());
     for (point_1, point_2) in points_1.iter().zip(points_2) {
         points.push([*point_1, *point_2]);
+    }
+    let points_len = points.len();
+    if points_len < 2 {
+        return Err("need at least two points for 2D nearest neighbor".to_string());
     }
 
     let kdtree: ImmutableKdTree<f64, 2> = ImmutableKdTree::new_from_slice(&points);
     let mut distance_total: f64 = 0.0;
     for point in points {
-        let mut result: f64 = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
+        let mut result: f64 =
+            kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
         if result == 0.0 {
-            result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2].distance;
+            if points_len < 3 {
+                return Err("need at least three distinct points for 2D nearest neighbor fallback".to_string());
+            }
+            result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2]
+                .distance;
         }
         distance_total += result.sqrt().ln();
     }
-    distance_total
+    Ok(distance_total)
 }
 // Helper function to generate Guassian data
 pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {

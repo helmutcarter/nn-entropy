@@ -146,6 +146,12 @@ fn main() {
     }
 
     let used_frames = one_d_data[0].len();
-    let entropy = calculate_entropy_from_data(one_d_data, used_frames);
+    let entropy = match calculate_entropy_from_data(one_d_data, used_frames) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("Entropy calculation failed: {err}");
+            std::process::exit(1);
+        }
+    };
     println!("Total entropy = {}", entropy);
 }
