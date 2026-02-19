@@ -1,3 +1,4 @@
+#![allow(unsafe_op_in_unsafe_fn)]
 use numpy::PyReadonlyArray2;
 use pyo3::prelude::*;
 use std::path::Path;
