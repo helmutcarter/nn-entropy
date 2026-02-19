@@ -23,7 +23,7 @@ cargo build
 ## CLI usage
 
 ```bash
-cargo run -- <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--python]
+cargo run -- <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] 
 ```
 
 Example:
