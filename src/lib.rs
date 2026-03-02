@@ -62,7 +62,8 @@ pub fn calculate_entropy_from_data(
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
     let one_d_entropy =
-        estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
+        // estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
+        estimate_entropy_efficient(one_d_distances_total, (n_frames as f64).recip(), one_d_constant*degrees_freedom as f64);
 
     let two_d_degrees_freedom = (0..degrees_freedom)
         .flat_map(|i| (i + 1)..degrees_freedom)
@@ -79,12 +80,9 @@ pub fn calculate_entropy_from_data(
         })
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
-    let two_d_entropy = estimate_entropy(
-        two_d_distances_total * 2.0,
-        n_frames,
-        two_d_constant,
-        two_d_degrees_freedom,
-    );
+    let two_d_entropy = 
+    // estimate_entropy(two_d_distances_total * 2.0,n_frames,two_d_constant,two_d_degrees_freedom);
+    estimate_entropy_efficient(two_d_distances_total * 2.0,(n_frames as f64).recip(), two_d_constant*two_d_degrees_freedom as f64);
 
     Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy)
 }
@@ -118,7 +116,8 @@ pub fn estimate_coordinate_entropy_rust(
 
     let one_d_entropies: Vec<f64> = one_d_distances
         .iter()
-        .map(|&distance| estimate_entropy(distance, n_frames, one_d_constant, 1))
+        // .map(|&distance| estimate_entropy(distance, n_frames, one_d_constant, 1))
+        .map(|&distance| estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant))
         .collect();
 
     Ok(one_d_entropies)
@@ -159,10 +158,10 @@ pub fn estimate_coordinate_mutual_information_rust(
         })?;
 
     assert_eq!(two_d_distances.len(), two_d_degrees_freedom); // Just to be safe
-
     let two_d_entropies: Vec<f64> = two_d_distances
         .iter()
-        .map(|&distance| estimate_entropy(distance * 2.0, n_frames, two_d_constant, 1))
+        // .map(|&distance| estimate_entropy(distance * 2.0, n_frames, two_d_constant, 1))
+        .map(|&distance| estimate_entropy_efficient(distance * 2.0, (n_frames as f64).recip(), two_d_constant))
         .collect();
     Ok(two_d_entropies)
 }
@@ -265,6 +264,17 @@ pub fn estimate_entropy(nn_distance: f64, n_frames: usize, constant: f64, n_inte
     // println!("{constant}");
     (nn_distance/(n_frames as f64)) + constant*(n_internal_coords as f64)
 }
+
+pub fn estimate_entropy_efficient(nn_distance: f64, reciprocal_n_frames: f64, constant: f64) -> f64 {
+    // Reduces number of instructions used, and uses fused multiply add when enabled
+    if cfg!(feature = "fma") {
+        nn_distance.mul_add(reciprocal_n_frames, constant)
+
+    } else {
+        nn_distance * reciprocal_n_frames + constant
+    }
+}
+
 pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
     let mut all_data: Vec<Vec<f64>> = Vec::new();
     let file_result = File::open(file_path);
