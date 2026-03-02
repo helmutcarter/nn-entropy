@@ -19,3 +19,8 @@ ndarray = "0.16.1"
 libm = "0.2.11"
 numpy = "0.21"
 pyo3 = { version = "0.21", features = ["extension-module"] }
+
+[profile.release]
+lto = "fat"     
+codegen-units = 1
+panic = "abort"
