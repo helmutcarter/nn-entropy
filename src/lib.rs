@@ -251,7 +251,7 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
     }
     Ok(distance_total)
 }
-// Helper function to generate Guassian data
+// Helper function to generate Gaussian data for testing
 pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     let normal = Normal::new(mean, std_dev).unwrap();
     let mut rng = rand::thread_rng();
