@@ -169,8 +169,8 @@ pub fn estimate_coordinate_mutual_information_rust(
 
 pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
     let mut unique_points = points.to_vec();
-    unique_points.sort_by(|a, b| a.total_cmp(b));
     unique_points.dedup();
+    unique_points.sort_by(|a, b| a.total_cmp(b));
     let total_unique_points = unique_points.len();  
     if total_unique_points < 2 {
         return Err("coordinate series must contain at least two unique values".to_string());
