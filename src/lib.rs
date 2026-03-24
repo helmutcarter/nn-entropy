@@ -1,13 +1,75 @@
 use kiddo::ImmutableKdTree;
 use kiddo::SquaredEuclidean;
+use std::collections::HashSet;
 use std::num::NonZero;
 use std::fs::File;
-use std::io::ErrorKind;
+use std::io::{BufRead, BufReader, ErrorKind};
+use std::path::Path;
 use rand_distr::{Normal, Distribution};
 use rayon::prelude::*;
 
 pub mod bat_library;
+pub mod extrapolation;
 pub mod pyo3_api;
+
+pub use bat_library::CoordinateSelection;
+pub use extrapolation::ExtrapolationConfig;
+pub use extrapolation::ExtrapolationFitModel;
+pub use extrapolation::ExtrapolationPlan;
+pub use extrapolation::ExtrapolationSubset;
+pub use extrapolation::BootstrapConfig;
+pub use extrapolation::BootstrapExtrapolationData;
+pub use extrapolation::EntropyExtrapolationConfig;
+pub use extrapolation::EntropyExtrapolationReport;
+pub use extrapolation::ExtrapolationFitPoint;
+pub use extrapolation::ModelDiagnostics;
+pub use extrapolation::SubsetBootstrapStatistics;
+pub use extrapolation::LinearFitResult;
+pub use extrapolation::StabilityFitResult;
+pub use extrapolation::build_default_subset_sizes;
+pub use extrapolation::build_extrapolation_plan;
+pub use extrapolation::bootstrap_extrapolation_data;
+pub use extrapolation::extrapolation_report_to_csv;
+pub use extrapolation::fit_extrapolated_entropy;
+pub use extrapolation::generate_block_bootstrap_indices;
+pub use extrapolation::run_entropy_extrapolation;
+pub use extrapolation::run_entropy_extrapolation_from_files;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TauObservable {
+    AllInternalCoordinates,
+    DihedralAngles,
+    PotentialEnergy,
+}
+
+impl TauObservable {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "all-internal-coordinates" | "all" => Ok(Self::AllInternalCoordinates),
+            "dihedral-angles" | "dihedrals" | "torsions" => Ok(Self::DihedralAngles),
+            "potential-energy" | "energy" => Ok(Self::PotentialEnergy),
+            _ => Err(format!(
+                "unknown tau observable '{value}'; expected one of: all-internal-coordinates, dihedral-angles, potential-energy"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AllInternalCoordinates => "all-internal-coordinates",
+            Self::DihedralAngles => "dihedral-angles",
+            Self::PotentialEnergy => "potential-energy",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TauEstimate {
+    pub observable: TauObservable,
+    pub tau: f64,
+    pub n_series: usize,
+    pub n_samples: usize,
+}
 
 fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(), String> {
     if one_d_data.is_empty() {
@@ -168,8 +230,8 @@ pub fn estimate_coordinate_mutual_information_rust(
 
 pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
     let mut unique_points = points.to_vec();
-    unique_points.dedup();
     unique_points.sort_by(|a, b| a.total_cmp(b));
+    unique_points.dedup();
     let total_unique_points = unique_points.len();  
     if total_unique_points < 2 {
         return Err("coordinate series must contain at least two unique values".to_string());
@@ -237,15 +299,15 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
     let kdtree: ImmutableKdTree<f64, 2> = ImmutableKdTree::new_from_slice(&points);
     let mut distance_total: f64 = 0.0;
     for point in points {
-        let mut result: f64 =
-            kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
-        if result == 0.0 {
-            if points_len < 3 {
-                return Err("need at least three distinct points for 2D nearest neighbor fallback".to_string());
-            }
-            result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2]
-                .distance;
-        }
+        let neighbors = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(points_len).unwrap());
+        let result = neighbors
+            .iter()
+            .skip(1)
+            .map(|neighbor| neighbor.distance)
+            .find(|&distance| distance > 0.0)
+            .ok_or_else(|| {
+                "need at least two distinct 2D points for nearest neighbor distance".to_string()
+            })?;
         distance_total += result.sqrt().ln();
     }
     Ok(distance_total)
@@ -272,6 +334,291 @@ pub fn estimate_entropy_efficient(nn_distance: f64, reciprocal_n_frames: f64, co
 
     } else {
         nn_distance * reciprocal_n_frames + constant
+    }
+}
+
+pub fn frames_to_coordinate_columns(frame_major_data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
+    let frame_count = frame_major_data.len();
+    if frame_count == 0 {
+        return Err("no frames available".to_string());
+    }
+    let dim = frame_major_data[0].len();
+    if dim == 0 {
+        return Err("no coordinates available".to_string());
+    }
+
+    let mut one_d_data: Vec<Vec<f64>> = vec![Vec::with_capacity(frame_count); dim];
+    for (frame_idx, frame) in frame_major_data.iter().enumerate() {
+        if frame.len() != dim {
+            return Err(format!(
+                "frame {frame_idx} has {} coordinates, expected {dim}",
+                frame.len()
+            ));
+        }
+        for (coord_idx, value) in frame.iter().enumerate() {
+            one_d_data[coord_idx].push(*value);
+        }
+    }
+    Ok(one_d_data)
+}
+
+pub fn load_internal_coordinate_data_from_files(
+    top_path: &Path,
+    traj_path: &Path,
+    frames: usize,
+    selection: CoordinateSelection,
+) -> Result<Vec<Vec<f64>>, String> {
+    let mut internal = bat_library::InternalCoordinates::new(top_path)
+        .map_err(|err| err.to_string())?;
+    internal
+        .calculate_internal_coords_with_selection(traj_path, frames, selection)
+        .map_err(|err| err.to_string())?;
+    frames_to_coordinate_columns(&internal.int_coords)
+}
+
+fn parse_numeric_token(token: &str) -> Option<f64> {
+    token.trim().parse::<f64>().ok()
+}
+
+fn parse_usize_token(token: &str) -> Option<usize> {
+    token.trim().parse::<usize>().ok()
+}
+
+fn energy_value_from_line(line: &str) -> Option<f64> {
+    let mut tokens = line.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == "EPtot" {
+            let eq = tokens.next()?;
+            if eq != "=" {
+                return None;
+            }
+            return parse_numeric_token(tokens.next()?);
+        }
+    }
+    None
+}
+
+fn nstep_from_line(line: &str) -> Option<usize> {
+    let mut tokens = line.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token == "NSTEP" {
+            let eq = tokens.next()?;
+            if eq != "=" {
+                return None;
+            }
+            return parse_usize_token(tokens.next()?);
+        }
+    }
+    None
+}
+
+pub fn load_potential_energy_from_mdout(mdout_path: &Path) -> Result<Vec<f64>, String> {
+    let file = File::open(mdout_path).map_err(|err| format!(
+        "failed to open mdout file {}: {err}",
+        mdout_path.display()
+    ))?;
+    let reader = BufReader::new(file);
+
+    let mut energies = Vec::new();
+    let mut seen_steps = HashSet::new();
+    let mut current_nstep = None;
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(|err| format!(
+            "failed to read mdout file {}: {err}",
+            mdout_path.display()
+        ))?;
+
+        if let Some(nstep) = nstep_from_line(&line) {
+            current_nstep = Some(nstep);
+            continue;
+        }
+
+        if let Some(energy) = energy_value_from_line(&line) {
+            if let Some(nstep) = current_nstep {
+                if seen_steps.insert(nstep) {
+                    energies.push(energy);
+                }
+            } else {
+                energies.push(energy);
+            }
+        }
+    }
+
+    if energies.is_empty() {
+        return Err(format!(
+            "no EPtot values found in mdout file {}",
+            mdout_path.display()
+        ));
+    }
+
+    Ok(energies)
+}
+
+pub fn estimate_integrated_autocorrelation_time(series: &[f64]) -> Result<f64, String> {
+    if series.len() < 2 {
+        return Err("need at least two samples to estimate autocorrelation time".to_string());
+    }
+    if series.iter().any(|value| !value.is_finite()) {
+        return Err("series contains non-finite values".to_string());
+    }
+
+    let n = series.len();
+    let mean = series.iter().sum::<f64>() / n as f64;
+    let centered: Vec<f64> = series.iter().map(|value| value - mean).collect();
+    let variance = centered.iter().map(|value| value * value).sum::<f64>() / n as f64;
+    if variance <= f64::EPSILON {
+        return Err("series variance is zero; cannot estimate autocorrelation time".to_string());
+    }
+
+    let max_lag = n.saturating_sub(1);
+    let mut tau = 0.5;
+    for lag in 1..=max_lag {
+        let cov = centered[..(n - lag)]
+            .iter()
+            .zip(&centered[lag..])
+            .map(|(left, right)| left * right)
+            .sum::<f64>()
+            / (n - lag) as f64;
+        let rho = cov / variance;
+        if !rho.is_finite() || rho <= 0.0 {
+            break;
+        }
+        tau += rho;
+    }
+
+    Ok(tau.max(0.5))
+}
+
+pub fn estimate_tau_from_series_set(series_set: &[Vec<f64>]) -> Result<f64, String> {
+    if series_set.is_empty() {
+        return Err("no observable series available for tau estimation".to_string());
+    }
+
+    let mut tau_max = 0.5_f64;
+    for (idx, series) in series_set.iter().enumerate() {
+        let tau = estimate_integrated_autocorrelation_time(series)
+            .map_err(|err| format!("failed to estimate tau for series {idx}: {err}"))?;
+        tau_max = tau_max.max(tau);
+    }
+    Ok(tau_max)
+}
+
+pub fn estimate_tau_from_internal_coordinate_data(
+    frame_major_data: &[Vec<f64>],
+) -> Result<f64, String> {
+    let one_d_data = frames_to_coordinate_columns(frame_major_data)?;
+    estimate_tau_from_series_set(&one_d_data)
+}
+
+pub fn estimate_tau_from_mdout(mdout_path: &Path) -> Result<f64, String> {
+    let energies = load_potential_energy_from_mdout(mdout_path)?;
+    estimate_integrated_autocorrelation_time(&energies)
+}
+
+fn slice_series(series: &[f64], start: usize, stop: Option<usize>) -> Result<Vec<f64>, String> {
+    if start >= series.len() {
+        return Err(format!(
+            "start {start} is beyond available samples ({})",
+            series.len()
+        ));
+    }
+    let end = stop.unwrap_or(series.len()).min(series.len());
+    if start >= end {
+        return Err(format!(
+            "start {start} must be smaller than stop {end} for tau estimation"
+        ));
+    }
+    Ok(series[start..end].to_vec())
+}
+
+fn slice_series_set(
+    series_set: &[Vec<f64>],
+    start: usize,
+    stop: Option<usize>,
+) -> Result<Vec<Vec<f64>>, String> {
+    if series_set.is_empty() {
+        return Err("no observable series available for tau estimation".to_string());
+    }
+    let expected_len = series_set[0].len();
+    if start >= expected_len {
+        return Err(format!(
+            "start {start} is beyond available samples ({expected_len})"
+        ));
+    }
+    let end = stop.unwrap_or(expected_len).min(expected_len);
+    if start >= end {
+        return Err(format!(
+            "start {start} must be smaller than stop {end} for tau estimation"
+        ));
+    }
+
+    let mut sliced = Vec::with_capacity(series_set.len());
+    for (idx, series) in series_set.iter().enumerate() {
+        if series.len() != expected_len {
+            return Err(format!(
+                "series {idx} has {} samples, expected {expected_len}",
+                series.len()
+            ));
+        }
+        sliced.push(series[start..end].to_vec());
+    }
+    Ok(sliced)
+}
+
+pub fn estimate_tau_from_files(
+    top_path: &Path,
+    traj_path: &Path,
+    start: usize,
+    stop: Option<usize>,
+    observable: TauObservable,
+    mdout_path: Option<&Path>,
+) -> Result<TauEstimate, String> {
+    match observable {
+        TauObservable::AllInternalCoordinates | TauObservable::DihedralAngles => {
+            let selection = match observable {
+                TauObservable::AllInternalCoordinates => CoordinateSelection::All,
+                TauObservable::DihedralAngles => CoordinateSelection::DihedralsOnly,
+                TauObservable::PotentialEnergy => unreachable!(),
+            };
+            let mut internal = bat_library::InternalCoordinates::new(top_path)
+                .map_err(|err| err.to_string())?;
+            internal
+                .calculate_internal_coords_with_selection(traj_path, stop.unwrap_or(usize::MAX), selection)
+                .map_err(|err| err.to_string())?;
+            let one_d_data = frames_to_coordinate_columns(&internal.int_coords)?;
+            let one_d_data = slice_series_set(&one_d_data, start, stop)?;
+            if one_d_data.is_empty() {
+                return Err(format!(
+                    "no {} available for tau estimation",
+                    observable.as_str()
+                ));
+            }
+            let n_samples = one_d_data[0].len();
+            let n_series = one_d_data.len();
+            let tau = estimate_tau_from_series_set(&one_d_data)?;
+            Ok(TauEstimate {
+                observable,
+                tau,
+                n_series,
+                n_samples,
+            })
+        }
+        TauObservable::PotentialEnergy => {
+            let mdout_path = mdout_path.ok_or(
+                "mdout path is required when tau observable is potential-energy".to_string(),
+            )?;
+            let energies = load_potential_energy_from_mdout(mdout_path)?;
+            let energies = slice_series(&energies, start, stop)?;
+            let n_samples = energies.len();
+            let tau = estimate_integrated_autocorrelation_time(&energies)?;
+            Ok(TauEstimate {
+                observable,
+                tau,
+                n_series: 1,
+                n_samples,
+            })
+        }
     }
 }
 

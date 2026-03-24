@@ -6,6 +6,12 @@ use std::path::Path;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateSelection {
+    All,
+    DihedralsOnly,
+}
+
 #[derive(Debug, Clone)]
 struct Prmtop {
     natom: usize,
@@ -869,6 +875,7 @@ fn int_c_f32(bat_list: &[Vec<usize>], traj: &[Vec<[f32; 3]>]) -> Vec<Vec<f64>> {
 }
 
 pub struct InternalCoordinates {
+    full_bat_list: Vec<Vec<usize>>,
     bat_list: Vec<Vec<usize>>,
     atom_num: usize,
     pub dim: usize,
@@ -923,6 +930,7 @@ impl InternalCoordinates {
 
         let dim = bat_list.len();
         Ok(InternalCoordinates {
+            full_bat_list: bat_list.clone(),
             bat_list,
             atom_num,
             dim,
@@ -931,23 +939,55 @@ impl InternalCoordinates {
         })
     }
 
+    pub fn select_coordinates(&mut self, selection: CoordinateSelection) {
+        self.bat_list = match selection {
+            CoordinateSelection::All => self.full_bat_list.clone(),
+            CoordinateSelection::DihedralsOnly => self
+                .full_bat_list
+                .iter()
+                .filter(|entry| entry.len() == 4)
+                .cloned()
+                .collect(),
+        };
+        self.dim = self.bat_list.len();
+        self.int_coords.clear();
+        self.pairs.clear();
+    }
+
+    pub fn available_coordinate_count(&self, selection: CoordinateSelection) -> usize {
+        match selection {
+            CoordinateSelection::All => self.full_bat_list.len(),
+            CoordinateSelection::DihedralsOnly => self
+                .full_bat_list
+                .iter()
+                .filter(|entry| entry.len() == 4)
+                .count(),
+        }
+    }
+
     pub fn calculate_internal_coords(
         &mut self,
         traj: &Path,
         frames: usize,
         torsions_only: bool,
     ) -> Result<()> {
+        let selection = if torsions_only {
+            CoordinateSelection::DihedralsOnly
+        } else {
+            CoordinateSelection::All
+        };
+        self.calculate_internal_coords_with_selection(traj, frames, selection)
+    }
+
+    pub fn calculate_internal_coords_with_selection(
+        &mut self,
+        traj: &Path,
+        frames: usize,
+        selection: CoordinateSelection,
+    ) -> Result<()> {
+        self.select_coordinates(selection);
         let mut reader = NetcdfReader::open(traj)?;
         let vartype = reader.coordinates_vartype()?;
-        if torsions_only {
-            self.bat_list = self
-                .bat_list
-                .iter()
-                .filter(|x| x.len() == 4)
-                .cloned()
-                .collect();
-            self.dim = self.bat_list.len();
-        }
         if vartype == 5 {
             let coords = reader.read_coordinates_f32(frames, self.atom_num)?;
             self.int_coords = int_c_f32(&self.bat_list, &coords);

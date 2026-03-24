@@ -1,0 +1,14 @@
+ NSTEP =     1000   TIME(PS) =       2.000  TEMP(K) =   299.87  PRESS =     0.0
+ Etot   =      -10.0000  EKtot   =         1.0000  EPtot      =      -11.0000
+
+  Softcore part of the system:      13 atoms,       TEMP(K)    =         359.78
+ SC_Etot=         2.0000  SC_EKtot=         1.0000  SC_EPtot   =         1.0000
+
+ NSTEP =     1000   TIME(PS) =       2.000  TEMP(K) =   299.65  PRESS =     0.0
+ Etot   =      -11.0000  EKtot   =         1.0000  EPtot      =      -12.0000
+
+ NSTEP =     2000   TIME(PS) =       4.000  TEMP(K) =   298.18  PRESS =     0.0
+ Etot   =       -9.0000  EKtot   =         1.0000  EPtot      =      -10.5000
+
+ NSTEP =     3000   TIME(PS) =       6.000  TEMP(K) =   297.09  PRESS =     0.0
+ Etot   =       -8.0000  EKtot   =         1.0000  EPtot      =       -9.7500

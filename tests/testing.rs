@@ -1,6 +1,13 @@
 use nn_entropy::*;
 use assert_approx_eq::assert_approx_eq;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rand_distr::{Normal, Distribution};
+use std::path::PathBuf;
+
+fn test_data_path(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+}
 
 #[test]
 fn test_one_d_nn_real_data() {
@@ -140,4 +147,397 @@ fn test_calc_internal_coords() {
         assert_approx_eq!(result[0][idx], expected_result[0][idx], 1e-5)
     }
     
+}
+
+#[test]
+fn test_load_potential_energy_from_mdout_deduplicates_nstep_blocks() {
+    let path = test_data_path("tests/fixtures/sample.prod.out");
+    let energies = load_potential_energy_from_mdout(&path).expect("mdout parsing failed");
+    assert_eq!(energies, vec![-11.0, -10.5, -9.75]);
+}
+
+#[test]
+fn test_integrated_autocorrelation_time_detects_correlated_series() {
+    let mut series = Vec::with_capacity(256);
+    let mut state = 0.0f64;
+    for idx in 0..256 {
+        let drive = ((idx % 7) as f64) - 3.0;
+        state = 0.9 * state + drive;
+        series.push(state);
+    }
+
+    let tau = estimate_integrated_autocorrelation_time(&series)
+        .expect("tau estimation failed");
+    assert!(tau > 1.0, "expected correlated series to have tau > 1, got {tau}");
+}
+
+#[test]
+fn test_build_default_subset_sizes_returns_increasing_prefixes() {
+    let subsets = build_default_subset_sizes(50_000, 5).expect("subset generation failed");
+    assert_eq!(subsets, vec![10_000, 20_000, 30_000, 40_000, 50_000]);
+}
+
+#[test]
+fn test_build_extrapolation_plan_uses_tau_in_effective_sample_size() {
+    let plan = build_extrapolation_plan(
+        100,
+        ExtrapolationConfig {
+            subset_sizes: vec![20, 40, 100],
+            fit_model: ExtrapolationFitModel::InverseN,
+            tau: Some(5.0),
+        },
+    )
+    .expect("plan construction failed");
+
+    assert_eq!(plan.subsets.len(), 3);
+    assert_approx_eq!(plan.subsets[0].effective_samples, 2.0);
+    assert_approx_eq!(plan.subsets[0].x, 0.5);
+    assert_approx_eq!(plan.subsets[2].effective_samples, 10.0);
+    assert_approx_eq!(plan.subsets[2].x, 0.1);
+}
+
+#[test]
+fn test_inverse_sqrt_n_fit_model_transform() {
+    let x = ExtrapolationFitModel::InverseSqrtN
+        .transform(25.0)
+        .expect("transform failed");
+    assert_approx_eq!(x, 0.2);
+}
+
+#[test]
+fn test_build_extrapolation_plan_rejects_non_monotonic_subsets() {
+    let err = build_extrapolation_plan(
+        100,
+        ExtrapolationConfig {
+            subset_sizes: vec![20, 20, 50],
+            fit_model: ExtrapolationFitModel::InverseN,
+            tau: None,
+        },
+    )
+    .expect_err("expected invalid subset sizes to fail");
+    assert!(err.contains("strictly increasing"));
+}
+
+#[test]
+fn test_generate_block_bootstrap_indices_has_expected_length_and_bounds() {
+    let mut rng = StdRng::seed_from_u64(7);
+    let indices =
+        generate_block_bootstrap_indices(11, 3, &mut rng).expect("index generation failed");
+    assert_eq!(indices.len(), 11);
+    assert!(indices.iter().all(|&idx| idx < 11));
+}
+
+#[test]
+fn test_bootstrap_extrapolation_data_returns_subset_statistics() {
+    let one_d_data = vec![
+        (0..60).map(|idx| idx as f64 * 0.1 + 0.01).collect::<Vec<_>>(),
+        (0..60)
+            .map(|idx| (idx as f64 * 0.13).sin() + idx as f64 * 0.005)
+            .collect::<Vec<_>>(),
+        (0..60)
+            .map(|idx| (idx as f64 * 0.17).cos() + idx as f64 * 0.004)
+            .collect::<Vec<_>>(),
+    ];
+
+    let plan = build_extrapolation_plan(
+        60,
+        ExtrapolationConfig {
+            subset_sizes: vec![20, 40, 60],
+            fit_model: ExtrapolationFitModel::InverseSqrtN,
+            tau: Some(2.0),
+        },
+    )
+    .expect("plan construction failed");
+
+    let stats = bootstrap_extrapolation_data(
+        &one_d_data,
+        plan,
+        BootstrapConfig {
+            replicates: 4,
+            block_size: 5,
+            seed: Some(1234),
+        },
+    )
+    .expect("bootstrap extrapolation failed");
+
+    assert_eq!(stats.subsets.len(), 3);
+    for subset in &stats.subsets {
+        assert_eq!(subset.replicate_entropies.len(), 4);
+        assert!(subset.mean_entropy.is_finite());
+        assert!(subset.variance.is_finite());
+        assert!(subset.variance >= 0.0);
+    }
+}
+
+#[test]
+fn test_fit_extrapolated_entropy_recovers_inverse_n_intercept() {
+    let plan = build_extrapolation_plan(
+        100,
+        ExtrapolationConfig {
+            subset_sizes: vec![25, 50, 100],
+            fit_model: ExtrapolationFitModel::InverseN,
+            tau: None,
+        },
+    )
+    .expect("plan construction failed");
+
+    let stats = BootstrapExtrapolationData {
+        plan,
+        bootstrap: BootstrapConfig {
+            replicates: 4,
+            block_size: 1,
+            seed: Some(1),
+        },
+        subsets: vec![
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 25,
+                    effective_samples: 25.0,
+                    x: 1.0 / 25.0,
+                },
+                replicate_entropies: vec![1.38, 1.4, 1.41, 1.39],
+                mean_entropy: 1.4,
+                variance: 0.01,
+            },
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 50,
+                    effective_samples: 50.0,
+                    x: 1.0 / 50.0,
+                },
+                replicate_entropies: vec![1.19, 1.2, 1.21, 1.2],
+                mean_entropy: 1.2,
+                variance: 0.01,
+            },
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 100,
+                    effective_samples: 100.0,
+                    x: 1.0 / 100.0,
+                },
+                replicate_entropies: vec![1.09, 1.1, 1.11, 1.1],
+                mean_entropy: 1.1,
+                variance: 0.01,
+            },
+        ],
+    };
+
+    let fit = fit_extrapolated_entropy(&stats).expect("fit failed");
+    assert_approx_eq!(fit.intercept, 1.0, 1e-10);
+    assert_approx_eq!(fit.slope, 10.0, 1e-10);
+    assert!(fit.intercept_std_err.is_finite());
+    assert_eq!(fit.points.len(), 3);
+}
+
+#[test]
+fn test_fit_extrapolated_entropy_recovers_inverse_sqrt_n_intercept() {
+    let stats = BootstrapExtrapolationData {
+        plan: ExtrapolationPlan {
+            total_samples: 100,
+            fit_model: ExtrapolationFitModel::InverseSqrtN,
+            tau: None,
+            subsets: vec![
+                ExtrapolationSubset {
+                    raw_samples: 25,
+                    effective_samples: 25.0,
+                    x: 0.2,
+                },
+                ExtrapolationSubset {
+                    raw_samples: 100,
+                    effective_samples: 100.0,
+                    x: 0.1,
+                },
+                ExtrapolationSubset {
+                    raw_samples: 400,
+                    effective_samples: 400.0,
+                    x: 0.05,
+                },
+            ],
+        },
+        bootstrap: BootstrapConfig {
+            replicates: 4,
+            block_size: 1,
+            seed: Some(2),
+        },
+        subsets: vec![
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 25,
+                    effective_samples: 25.0,
+                    x: 0.2,
+                },
+                replicate_entropies: vec![2.38, 2.4, 2.42, 2.4],
+                mean_entropy: 2.4,
+                variance: 0.02,
+            },
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 100,
+                    effective_samples: 100.0,
+                    x: 0.1,
+                },
+                replicate_entropies: vec![2.18, 2.19, 2.21, 2.2],
+                mean_entropy: 2.2,
+                variance: 0.02,
+            },
+            SubsetBootstrapStatistics {
+                subset: ExtrapolationSubset {
+                    raw_samples: 400,
+                    effective_samples: 400.0,
+                    x: 0.05,
+                },
+                replicate_entropies: vec![2.08, 2.09, 2.11, 2.1],
+                mean_entropy: 2.1,
+                variance: 0.02,
+            },
+        ],
+    };
+
+    let fit = fit_extrapolated_entropy(&stats).expect("fit failed");
+    assert_approx_eq!(fit.intercept, 2.0, 1e-10);
+    assert_approx_eq!(fit.slope, 2.0, 1e-10);
+    assert!(fit.weighted_residual_sum_squares <= 1e-10);
+}
+
+#[test]
+fn test_run_entropy_extrapolation_returns_full_report() {
+    let one_d_data = vec![
+        (0..40).map(|idx| idx as f64 * 0.07 + 0.01).collect::<Vec<_>>(),
+        (0..40)
+            .map(|idx| (idx as f64 * 0.19).sin() + idx as f64 * 0.004)
+            .collect::<Vec<_>>(),
+        (0..40)
+            .map(|idx| (idx as f64 * 0.11).cos() + idx as f64 * 0.003)
+            .collect::<Vec<_>>(),
+    ];
+
+    let report = run_entropy_extrapolation(
+        &one_d_data,
+        EntropyExtrapolationConfig {
+            subset_sizes: Some(vec![20, 30, 40]),
+            subset_count: 3,
+            fit_model: ExtrapolationFitModel::InverseN,
+            compare_models: true,
+            bootstrap_replicates: Some(4),
+            block_size: Some(4),
+            bootstrap_seed: Some(99),
+            tau: Some(2.0),
+        },
+        None,
+    )
+    .expect("high-level extrapolation failed");
+
+    assert!(report.total_entropy.is_finite());
+    assert_eq!(report.primary.bootstrap_data.subsets.len(), 3);
+    assert_eq!(report.primary.fit.points.len(), 3);
+    assert!(report.primary.fit.intercept.is_finite());
+    assert_eq!(report.comparisons.len(), 1);
+    assert_eq!(report.primary.trailing_subset_fits.len(), 1);
+}
+
+#[test]
+fn test_run_entropy_extrapolation_model_comparison_uses_both_models() {
+    let one_d_data = vec![
+        (0..50).map(|idx| idx as f64 * 0.05 + 0.01).collect::<Vec<_>>(),
+        (0..50)
+            .map(|idx| (idx as f64 * 0.07).sin() + idx as f64 * 0.002)
+            .collect::<Vec<_>>(),
+        (0..50)
+            .map(|idx| (idx as f64 * 0.13).cos() + idx as f64 * 0.003)
+            .collect::<Vec<_>>(),
+    ];
+
+    let report = run_entropy_extrapolation(
+        &one_d_data,
+        EntropyExtrapolationConfig {
+            subset_sizes: Some(vec![20, 30, 40, 50]),
+            subset_count: 4,
+            fit_model: ExtrapolationFitModel::InverseSqrtN,
+            compare_models: true,
+            bootstrap_replicates: Some(3),
+            block_size: Some(3),
+            bootstrap_seed: Some(5),
+            tau: Some(1.5),
+        },
+        None,
+    )
+    .expect("extrapolation with model comparison failed");
+
+    assert_eq!(report.primary.model, ExtrapolationFitModel::InverseSqrtN);
+    assert_eq!(report.comparisons.len(), 1);
+    assert_eq!(report.comparisons[0].model, ExtrapolationFitModel::InverseN);
+    assert_eq!(report.primary.trailing_subset_fits.len(), 2);
+    assert!(report
+        .primary
+        .trailing_subset_fits
+        .iter()
+        .all(|result| result.fit.intercept.is_finite()));
+}
+
+#[test]
+fn test_extrapolation_report_to_csv_includes_models_and_stability_rows() {
+    let one_d_data = vec![
+        (0..40).map(|idx| idx as f64 * 0.07 + 0.01).collect::<Vec<_>>(),
+        (0..40)
+            .map(|idx| (idx as f64 * 0.19).sin() + idx as f64 * 0.004)
+            .collect::<Vec<_>>(),
+        (0..40)
+            .map(|idx| (idx as f64 * 0.11).cos() + idx as f64 * 0.003)
+            .collect::<Vec<_>>(),
+    ];
+
+    let report = run_entropy_extrapolation(
+        &one_d_data,
+        EntropyExtrapolationConfig {
+            subset_sizes: Some(vec![20, 30, 40]),
+            subset_count: 3,
+            fit_model: ExtrapolationFitModel::InverseN,
+            compare_models: true,
+            bootstrap_replicates: Some(3),
+            block_size: Some(3),
+            bootstrap_seed: Some(8),
+            tau: Some(2.0),
+        },
+        None,
+    )
+    .expect("report generation failed");
+
+    let csv = extrapolation_report_to_csv(&report);
+    assert!(csv.contains("row_type,series,model"));
+    assert!(csv.contains("fit_point,primary,inverse-n"));
+    assert!(csv.contains("comparison,inverse-sqrt-n"));
+    assert!(csv.contains("stability,primary,inverse-n"));
+}
+
+#[test]
+fn test_run_entropy_extrapolation_without_bootstrap_uses_raw_subset_curve() {
+    let one_d_data = vec![
+        (0..30).map(|idx| idx as f64 * 0.09 + 0.01).collect::<Vec<_>>(),
+        (0..30)
+            .map(|idx| (idx as f64 * 0.17).sin() + idx as f64 * 0.002)
+            .collect::<Vec<_>>(),
+        (0..30)
+            .map(|idx| (idx as f64 * 0.13).cos() + idx as f64 * 0.003)
+            .collect::<Vec<_>>(),
+    ];
+
+    let report = run_entropy_extrapolation(
+        &one_d_data,
+        EntropyExtrapolationConfig {
+            subset_sizes: Some(vec![10, 20, 30]),
+            subset_count: 3,
+            fit_model: ExtrapolationFitModel::InverseN,
+            compare_models: false,
+            bootstrap_replicates: None,
+            block_size: None,
+            bootstrap_seed: None,
+            tau: None,
+        },
+        None,
+    )
+    .expect("no-bootstrap extrapolation failed");
+
+    assert_eq!(report.primary.bootstrap_data.bootstrap.replicates, 0);
+    assert_eq!(report.primary.bootstrap_data.subsets.len(), 3);
+    assert!(report.primary.fit.intercept.is_finite());
 }

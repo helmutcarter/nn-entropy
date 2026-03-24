@@ -23,7 +23,7 @@ cargo build --release
 ## CLI usage
 
 ```bash
-cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] 
+cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--tau-observable NAME] [--mdout PATH] [--extrapolate] [--subset-sizes A,B,C] [--subset-count N] [--bootstrap-replicates N] [--block-size N] [--fit-model NAME] [--bootstrap-seed N] [--output-csv PATH]
 ```
 
 Example:
@@ -33,8 +33,39 @@ cargo run --release <path_to_parm7> <path_to_nc>
 ```
 
 Notes:
-- `--stop` limits the number of frames read to N.
-- `--start` skips the first N frames
+- `--torsions-only`: off by default. When omitted, the CLI uses all internal coordinates.
+- `--start`: defaults to `0`.
+- `--stop`: defaults to reading all available frames.
+- `--tau-observable`: off by default. Supported values are `all-internal-coordinates`, `dihedral-angles`, and `potential-energy`.
+- `--mdout`: no default. It is required with `--tau-observable potential-energy` and should point to an AMBER `mdout` file containing `EPtot` records.
+- `--extrapolate`: off by default. When enabled, the CLI runs the finite-sample workflow: nested subsets, direct fitting on the raw subset curve by default, automatic comparison between `inverse-n` and `inverse-sqrt-n`, and trailing-subset stability checks.
+- `--fit-model`: defaults to `inverse-n`. Supported values are `inverse-n` and `inverse-sqrt-n`.
+- `--subset-sizes`: no default. When omitted, the CLI generates nested subset sizes automatically.
+- `--subset-count`: defaults to `5` when `--subset-sizes` is omitted.
+- `--bootstrap-replicates`: off by default. When provided, bootstrap becomes enabled with the requested replicate count.
+- `--block-size`: only used when bootstrap is enabled. It defaults to `ceil(tau)` when `tau` is available, otherwise `1`.
+- `--bootstrap-seed`: only used when bootstrap is enabled. When omitted, bootstrap sampling is nondeterministic.
+- `--output-csv`: no default. When provided with `--extrapolate`, writes the convergence table to a CSV file.
+
+Example extrapolation run:
+
+```bash
+cargo run --release tests/fixtures/test.parm7 tests/fixtures/test.nc --extrapolate --fit-model inverse-sqrt-n --subset-sizes 3,4,5 --output-csv convergence.csv
+```
+
+To enable bootstrap explicitly:
+
+```bash
+cargo run --release tests/fixtures/test.parm7 tests/fixtures/test.nc --extrapolate --fit-model inverse-sqrt-n --subset-sizes 3,4,5 --bootstrap-replicates 3 --block-size 5 --output-csv convergence.csv
+```
+
+The CSV contains one row per subset per model, plus stability rows for largest-subset refits. The main columns are:
+- `row_type`: `fit_point` or `stability`
+- `series`: `primary` or `comparison`
+- `model`: `inverse-n` or `inverse-sqrt-n`
+- `n_or_subset_count`: subset size `N` for `fit_point` rows, or the number of largest subsets used for a `stability` refit
+- `effective_samples`, `x`, `mean_entropy`, `variance`, `weight`, `fitted_entropy`, `residual`
+- `intercept`, `intercept_std_err`, `slope`, `slope_std_err`, `weighted_residual_sum_squares`
 
 ## Rust library usage
 
@@ -48,6 +79,8 @@ let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
 Other helpers:
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
+- `run_entropy_extrapolation` for the in-memory extrapolation workflow.
+- `run_entropy_extrapolation_from_files` for the file-based extrapolation workflow.
 
 ## Python bindings
 
