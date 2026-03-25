@@ -300,13 +300,13 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
     let mut distance_total: f64 = 0.0;
     for point in points {
         let mut result: f64 =
-                    kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
-                if result == 0.0 {
-                    if points_len < 3 {
-                        return Err("need at least three distinct points for 2D nearest neighbor fallback".to_string());
-                    }
-                    result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2]
-                        .distance;
+                kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
+            if result == 0.0 {
+                if points_len < 3 {
+                    return Err("need at least three distinct points for 2D nearest neighbor fallback".to_string());
+                }
+                result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2]
+                    .distance;
                 }
         distance_total += result.sqrt().ln();
     }
