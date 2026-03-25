@@ -47,7 +47,18 @@ fn print_model_diagnostics(label: &str, diagnostics: &ModelDiagnostics) {
         diagnostics.fit.intercept,
         diagnostics.fit.intercept_std_err
     );
+    println!(
+        "  Extrapolated 1D entropy sum = {} +/- {}",
+        diagnostics.one_d_fit.intercept,
+        diagnostics.one_d_fit.intercept_std_err
+    );
+    println!(
+        "  Extrapolated MI sum = {} +/- {}",
+        diagnostics.mutual_information_fit.intercept,
+        diagnostics.mutual_information_fit.intercept_std_err
+    );
     println!("  Fit slope = {}", diagnostics.fit.slope);
+    println!("  R^2 = {}", diagnostics.fit.r_squared);
     println!(
         "  Weighted residual sum of squares = {}",
         diagnostics.fit.weighted_residual_sum_squares
@@ -295,6 +306,7 @@ fn main() {
             block_size,
             bootstrap_seed,
             tau: None,
+            show_progress: true,
         };
         let report = match run_entropy_extrapolation_from_files(
             top_path,

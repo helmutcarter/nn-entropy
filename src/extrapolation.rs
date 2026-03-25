@@ -2,9 +2,11 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::calculate_entropy_from_data;
+use crate::calculate_entropy_terms_from_data;
 use crate::estimate_tau_from_files;
 use crate::load_internal_coordinate_data_from_files;
 use crate::CoordinateSelection;
+use crate::EntropyTerms;
 use crate::TauEstimate;
 use crate::TauObservable;
 
@@ -109,6 +111,7 @@ pub struct LinearFitResult {
     pub intercept_std_err: f64,
     pub slope_std_err: f64,
     pub covariance_intercept_slope: f64,
+    pub r_squared: f64,
     pub weighted_residual_sum_squares: f64,
     pub points: Vec<ExtrapolationFitPoint>,
 }
@@ -123,7 +126,11 @@ pub struct StabilityFitResult {
 pub struct ModelDiagnostics {
     pub model: ExtrapolationFitModel,
     pub bootstrap_data: BootstrapExtrapolationData,
+    pub one_d_data: BootstrapExtrapolationData,
+    pub mutual_information_data: BootstrapExtrapolationData,
     pub fit: LinearFitResult,
+    pub one_d_fit: LinearFitResult,
+    pub mutual_information_fit: LinearFitResult,
     pub trailing_subset_fits: Vec<StabilityFitResult>,
 }
 
@@ -137,6 +144,7 @@ pub struct EntropyExtrapolationConfig {
     pub block_size: Option<usize>,
     pub bootstrap_seed: Option<u64>,
     pub tau: Option<f64>,
+    pub show_progress: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +159,7 @@ fn write_model_csv_rows(output: &mut String, label: &str, diagnostics: &ModelDia
     for point in &diagnostics.fit.points {
         let fitted_entropy = diagnostics.fit.intercept + diagnostics.fit.slope * point.x;
         output.push_str(&format!(
-            "fit_point,{label},{},{},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15}\n",
+            "fit_point,{label},{},{},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15},{:.15}\n",
             diagnostics.model.as_str(),
             point.raw_samples,
             point.effective_samples,
@@ -165,19 +173,21 @@ fn write_model_csv_rows(output: &mut String, label: &str, diagnostics: &ModelDia
             diagnostics.fit.intercept_std_err,
             diagnostics.fit.slope,
             diagnostics.fit.slope_std_err,
+            diagnostics.fit.r_squared,
             diagnostics.fit.weighted_residual_sum_squares,
         ));
     }
 
     for stability in &diagnostics.trailing_subset_fits {
         output.push_str(&format!(
-            "stability,{label},{},{},,,,,,,,{:.15},{:.15},{:.15},{:.15},{:.15}\n",
+            "stability,{label},{},{},,,,,,,,{:.15},{:.15},{:.15},{:.15},{:.15},{:.15}\n",
             diagnostics.model.as_str(),
             stability.subset_count,
             stability.fit.intercept,
             stability.fit.intercept_std_err,
             stability.fit.slope,
             stability.fit.slope_std_err,
+            stability.fit.r_squared,
             stability.fit.weighted_residual_sum_squares,
         ));
     }
@@ -185,7 +195,7 @@ fn write_model_csv_rows(output: &mut String, label: &str, diagnostics: &ModelDia
 
 pub fn extrapolation_report_to_csv(report: &EntropyExtrapolationReport) -> String {
     let mut output = String::from(
-        "row_type,series,model,n_or_subset_count,effective_samples,x,mean_entropy,variance,weight,fitted_entropy,residual,intercept,intercept_std_err,slope,slope_std_err,weighted_residual_sum_squares\n",
+        "row_type,series,model,n_or_subset_count,effective_samples,x,mean_entropy,variance,weight,fitted_entropy,residual,intercept,intercept_std_err,slope,slope_std_err,r_squared,weighted_residual_sum_squares\n",
     );
     write_model_csv_rows(&mut output, "primary", &report.primary);
     for diagnostics in &report.comparisons {
@@ -482,7 +492,7 @@ pub fn fit_extrapolated_entropy(
         let variance = if subset.variance.is_finite() && subset.variance > 0.0 {
             subset.variance
         } else {
-            1e-12
+            1.0
         };
         let weight = variance.recip();
         let x = subset.subset.x;
@@ -505,16 +515,20 @@ pub fn fit_extrapolated_entropy(
     let intercept = (sxx * sy - sx * sxy) / delta;
     let slope = (s * sxy - sx * sy) / delta;
 
+    let weighted_mean_y = sy / s;
     let covariance_00 = sxx / delta;
     let covariance_11 = s / delta;
     let covariance_01 = -sx / delta;
 
     let mut points = Vec::with_capacity(normalized_points.len());
     let mut weighted_residual_sum_squares = 0.0;
+    let mut weighted_total_sum_squares = 0.0;
     for (subset, variance, weight) in normalized_points {
         let predicted = intercept + slope * subset.subset.x;
         let residual = subset.mean_entropy - predicted;
         weighted_residual_sum_squares += weight * residual * residual;
+        let centered = subset.mean_entropy - weighted_mean_y;
+        weighted_total_sum_squares += weight * centered * centered;
         points.push(ExtrapolationFitPoint {
             raw_samples: subset.subset.raw_samples,
             effective_samples: subset.subset.effective_samples,
@@ -525,6 +539,11 @@ pub fn fit_extrapolated_entropy(
             residual,
         });
     }
+    let r_squared = if weighted_total_sum_squares <= f64::EPSILON {
+        1.0
+    } else {
+        1.0 - weighted_residual_sum_squares / weighted_total_sum_squares
+    };
 
     Ok(LinearFitResult {
         model: data.plan.fit_model,
@@ -533,28 +552,150 @@ pub fn fit_extrapolated_entropy(
         intercept_std_err: covariance_00.sqrt(),
         slope_std_err: covariance_11.sqrt(),
         covariance_intercept_slope: covariance_01,
+        r_squared,
         weighted_residual_sum_squares,
         points,
     })
 }
 
-fn bootstrap_data_with_model(
+fn terms_from_sample(
     one_d_data: &[Vec<f64>],
-    subset_sizes: &[usize],
-    fit_model: ExtrapolationFitModel,
-    tau: Option<f64>,
-    bootstrap: &BootstrapConfig,
+    raw_samples: usize,
+    indices: Option<&[usize]>,
+) -> Result<EntropyTerms, String> {
+    let data = match indices {
+        Some(indices) => sample_coordinate_prefix(one_d_data, raw_samples, indices)?,
+        None => one_d_data
+            .iter()
+            .map(|coord| coord[..raw_samples].to_vec())
+            .collect(),
+    };
+    calculate_entropy_terms_from_data(data, raw_samples)
+}
+
+fn build_scalar_data_from_terms<F>(
+    plan: ExtrapolationPlan,
+    bootstrap: BootstrapConfig,
+    all_terms: Vec<Vec<EntropyTerms>>,
+    selector: F,
+) -> BootstrapExtrapolationData
+where
+    F: Fn(&EntropyTerms) -> f64,
+{
+    let subsets = plan
+        .subsets
+        .iter()
+        .zip(all_terms.iter())
+        .map(|(subset, terms)| {
+            let replicate_entropies: Vec<f64> = terms.iter().map(&selector).collect();
+            let mean_entropy = mean(&replicate_entropies);
+            let variance = sample_variance(&replicate_entropies, mean_entropy);
+            SubsetBootstrapStatistics {
+                subset: subset.clone(),
+                replicate_entropies,
+                mean_entropy,
+                variance,
+            }
+        })
+        .collect();
+    BootstrapExtrapolationData {
+        plan,
+        bootstrap,
+        subsets,
+    }
+}
+
+fn combine_component_data(
+    one_d_data: &BootstrapExtrapolationData,
+    mutual_information_data: &BootstrapExtrapolationData,
 ) -> Result<BootstrapExtrapolationData, String> {
-    let total_samples = validate_coordinate_matrix(one_d_data)?;
-    let plan = build_extrapolation_plan(
-        total_samples,
-        ExtrapolationConfig {
-            subset_sizes: subset_sizes.to_vec(),
-            fit_model,
-            tau,
-        },
-    )?;
-    bootstrap_extrapolation_data(one_d_data, plan, bootstrap.clone())
+    if one_d_data.subsets.len() != mutual_information_data.subsets.len() {
+        return Err("component subset counts do not match".to_string());
+    }
+    let mut subsets = Vec::with_capacity(one_d_data.subsets.len());
+    for (one_d_subset, mi_subset) in one_d_data.subsets.iter().zip(&mutual_information_data.subsets) {
+        let mean_entropy = one_d_subset.mean_entropy - mi_subset.mean_entropy;
+        let variance = one_d_subset.variance + mi_subset.variance;
+        subsets.push(SubsetBootstrapStatistics {
+            subset: one_d_subset.subset.clone(),
+            replicate_entropies: vec![mean_entropy],
+            mean_entropy,
+            variance,
+        });
+    }
+    Ok(BootstrapExtrapolationData {
+        plan: one_d_data.plan.clone(),
+        bootstrap: one_d_data.bootstrap.clone(),
+        subsets,
+    })
+}
+
+fn combine_component_fits(
+    model: ExtrapolationFitModel,
+    one_d_fit: &LinearFitResult,
+    mutual_information_fit: &LinearFitResult,
+    combined_data: &BootstrapExtrapolationData,
+) -> LinearFitResult {
+    let intercept = one_d_fit.intercept - mutual_information_fit.intercept;
+    let slope = one_d_fit.slope - mutual_information_fit.slope;
+    let intercept_std_err = (
+        one_d_fit.intercept_std_err.powi(2)
+            + mutual_information_fit.intercept_std_err.powi(2)
+    )
+    .sqrt();
+    let slope_std_err =
+        (one_d_fit.slope_std_err.powi(2) + mutual_information_fit.slope_std_err.powi(2)).sqrt();
+    let covariance_intercept_slope =
+        one_d_fit.covariance_intercept_slope - mutual_information_fit.covariance_intercept_slope;
+
+    let weighted_mean_y = {
+        let mut sum_w = 0.0;
+        let mut sum_wy = 0.0;
+        for subset in &combined_data.subsets {
+            let w = if subset.variance > 0.0 { subset.variance.recip() } else { 1.0 };
+            sum_w += w;
+            sum_wy += w * subset.mean_entropy;
+        }
+        if sum_w > 0.0 { sum_wy / sum_w } else { 0.0 }
+    };
+
+    let mut points = Vec::with_capacity(combined_data.subsets.len());
+    let mut weighted_residual_sum_squares = 0.0;
+    let mut weighted_total_sum_squares = 0.0;
+    for subset in &combined_data.subsets {
+        let weight = if subset.variance > 0.0 { subset.variance.recip() } else { 1.0 };
+        let predicted = intercept + slope * subset.subset.x;
+        let residual = subset.mean_entropy - predicted;
+        let centered = subset.mean_entropy - weighted_mean_y;
+        weighted_residual_sum_squares += weight * residual * residual;
+        weighted_total_sum_squares += weight * centered * centered;
+        points.push(ExtrapolationFitPoint {
+            raw_samples: subset.subset.raw_samples,
+            effective_samples: subset.subset.effective_samples,
+            x: subset.subset.x,
+            y: subset.mean_entropy,
+            variance: subset.variance,
+            weight,
+            residual,
+        });
+    }
+    let r_squared = if weighted_total_sum_squares <= f64::EPSILON {
+        1.0
+    } else {
+        1.0 - weighted_residual_sum_squares / weighted_total_sum_squares
+    };
+
+    LinearFitResult {
+        model,
+        intercept,
+        slope,
+        intercept_std_err,
+        slope_std_err,
+        covariance_intercept_slope,
+        r_squared,
+        weighted_residual_sum_squares,
+        points,
+    }
 }
 
 fn trailing_subset_fit(
@@ -620,57 +761,73 @@ fn build_model_diagnostics(
     tau: Option<f64>,
     bootstrap: Option<&BootstrapConfig>,
 ) -> Result<ModelDiagnostics, String> {
-    let bootstrap_data = match bootstrap {
-        Some(bootstrap) => bootstrap_data_with_model(
-            one_d_data,
-            subset_sizes,
+    let total_samples = validate_coordinate_matrix(one_d_data)?;
+    let plan = build_extrapolation_plan(
+        total_samples,
+        ExtrapolationConfig {
+            subset_sizes: subset_sizes.to_vec(),
             fit_model,
             tau,
-            bootstrap,
-        )?,
-        None => {
-            let total_samples = validate_coordinate_matrix(one_d_data)?;
-            let plan = build_extrapolation_plan(
-                total_samples,
-                ExtrapolationConfig {
-                    subset_sizes: subset_sizes.to_vec(),
-                    fit_model,
-                    tau,
-                },
-            )?;
-            let mut subsets = Vec::with_capacity(plan.subsets.len());
-            for subset in &plan.subsets {
-                let entropy = calculate_entropy_from_data(one_d_data.to_vec(), subset.raw_samples)
-                    .map_err(|err| {
-                        format!(
-                            "entropy calculation failed for subset {}: {err}",
-                            subset.raw_samples
-                        )
-                    })?;
-                subsets.push(SubsetBootstrapStatistics {
-                    subset: subset.clone(),
-                    replicate_entropies: vec![entropy],
-                    mean_entropy: entropy,
-                    variance: 1.0,
-                });
-            }
-            BootstrapExtrapolationData {
-                plan,
-                bootstrap: BootstrapConfig {
-                    replicates: 0,
-                    block_size: 0,
-                    seed: None,
-                },
-                subsets,
-            }
-        }
+        },
+    )?;
+    let bootstrap = bootstrap.cloned().unwrap_or(BootstrapConfig {
+        replicates: 0,
+        block_size: 0,
+        seed: None,
+    });
+    let mut rng = match bootstrap.seed {
+        Some(seed) => StdRng::seed_from_u64(seed),
+        None => StdRng::from_entropy(),
     };
-    let fit = fit_extrapolated_entropy(&bootstrap_data)?;
+    let mut all_terms: Vec<Vec<EntropyTerms>> = Vec::with_capacity(plan.subsets.len());
+    for subset in &plan.subsets {
+        let replicates = if bootstrap.replicates > 0 { bootstrap.replicates } else { 1 };
+        let mut terms_for_subset = Vec::with_capacity(replicates);
+        for _ in 0..replicates {
+            let terms = if bootstrap.replicates > 0 {
+                let indices = generate_block_bootstrap_indices(
+                    subset.raw_samples,
+                    bootstrap.block_size,
+                    &mut rng,
+                )?;
+                terms_from_sample(one_d_data, subset.raw_samples, Some(&indices))
+            } else {
+                terms_from_sample(one_d_data, subset.raw_samples, None)
+            }?;
+            terms_for_subset.push(terms);
+        }
+        all_terms.push(terms_for_subset);
+    }
+    let one_d_bootstrap_data = build_scalar_data_from_terms(
+        plan.clone(),
+        bootstrap.clone(),
+        all_terms.clone(),
+        |terms| terms.one_d_sum,
+    );
+    let mutual_information_data = build_scalar_data_from_terms(
+        plan.clone(),
+        bootstrap.clone(),
+        all_terms,
+        |terms| terms.mutual_information_sum,
+    );
+    let bootstrap_data = combine_component_data(&one_d_bootstrap_data, &mutual_information_data)?;
+    let one_d_fit = fit_extrapolated_entropy(&one_d_bootstrap_data)?;
+    let mutual_information_fit = fit_extrapolated_entropy(&mutual_information_data)?;
+    let fit = combine_component_fits(
+        fit_model,
+        &one_d_fit,
+        &mutual_information_fit,
+        &bootstrap_data,
+    );
     let trailing_subset_fits = compute_trailing_subset_fits(&bootstrap_data)?;
     Ok(ModelDiagnostics {
         model: fit_model,
         bootstrap_data,
+        one_d_data: one_d_bootstrap_data,
+        mutual_information_data,
         fit,
+        one_d_fit,
+        mutual_information_fit,
         trailing_subset_fits,
     })
 }

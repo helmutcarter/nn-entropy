@@ -71,6 +71,15 @@ pub struct TauEstimate {
     pub n_samples: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct EntropyTerms {
+    pub one_d_sum: f64,
+    pub two_d_sum: f64,
+    pub mutual_information_sum: f64,
+    pub total_entropy: f64,
+    pub degrees_freedom: usize,
+}
+
 fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(), String> {
     if one_d_data.is_empty() {
         return Err("no coordinate data provided".to_string());
@@ -100,10 +109,10 @@ fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(),
     }
     Ok(())
 }
-pub fn calculate_entropy_from_data(
+pub fn calculate_entropy_terms_from_data(
     one_d_data: Vec<Vec<f64>>,
     frames_end: usize,
-) -> Result<f64, String> {
+) -> Result<EntropyTerms, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
 
     let one_d_data = one_d_data
@@ -146,7 +155,24 @@ pub fn calculate_entropy_from_data(
     // estimate_entropy(two_d_distances_total * 2.0,n_frames,two_d_constant,two_d_degrees_freedom);
     estimate_entropy_efficient(two_d_distances_total * 2.0,(n_frames as f64).recip(), two_d_constant*two_d_degrees_freedom as f64);
 
-    Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy)
+    let mutual_information_sum =
+        ((degrees_freedom - 1) as f64) * one_d_entropy - two_d_entropy;
+    let total_entropy = one_d_entropy - mutual_information_sum;
+
+    Ok(EntropyTerms {
+        one_d_sum: one_d_entropy,
+        two_d_sum: two_d_entropy,
+        mutual_information_sum,
+        total_entropy,
+        degrees_freedom,
+    })
+}
+
+pub fn calculate_entropy_from_data(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+) -> Result<f64, String> {
+    Ok(calculate_entropy_terms_from_data(one_d_data, frames_end)?.total_entropy)
 }
 
 pub fn estimate_coordinate_entropy_rust(

@@ -325,6 +325,7 @@ fn test_fit_extrapolated_entropy_recovers_inverse_n_intercept() {
     let fit = fit_extrapolated_entropy(&stats).expect("fit failed");
     assert_approx_eq!(fit.intercept, 1.0, 1e-10);
     assert_approx_eq!(fit.slope, 10.0, 1e-10);
+    assert_approx_eq!(fit.r_squared, 1.0, 1e-10);
     assert!(fit.intercept_std_err.is_finite());
     assert_eq!(fit.points.len(), 3);
 }
@@ -396,6 +397,7 @@ fn test_fit_extrapolated_entropy_recovers_inverse_sqrt_n_intercept() {
     let fit = fit_extrapolated_entropy(&stats).expect("fit failed");
     assert_approx_eq!(fit.intercept, 2.0, 1e-10);
     assert_approx_eq!(fit.slope, 2.0, 1e-10);
+    assert_approx_eq!(fit.r_squared, 1.0, 1e-10);
     assert!(fit.weighted_residual_sum_squares <= 1e-10);
 }
 
@@ -422,6 +424,7 @@ fn test_run_entropy_extrapolation_returns_full_report() {
             block_size: Some(4),
             bootstrap_seed: Some(99),
             tau: Some(2.0),
+            show_progress: false,
         },
         None,
     )
@@ -458,6 +461,7 @@ fn test_run_entropy_extrapolation_model_comparison_uses_both_models() {
             block_size: Some(3),
             bootstrap_seed: Some(5),
             tau: Some(1.5),
+            show_progress: false,
         },
         None,
     )
@@ -497,6 +501,7 @@ fn test_extrapolation_report_to_csv_includes_models_and_stability_rows() {
             block_size: Some(3),
             bootstrap_seed: Some(8),
             tau: Some(2.0),
+            show_progress: false,
         },
         None,
     )
@@ -504,6 +509,7 @@ fn test_extrapolation_report_to_csv_includes_models_and_stability_rows() {
 
     let csv = extrapolation_report_to_csv(&report);
     assert!(csv.contains("row_type,series,model"));
+    assert!(csv.contains("r_squared"));
     assert!(csv.contains("fit_point,primary,inverse-n"));
     assert!(csv.contains("comparison,inverse-sqrt-n"));
     assert!(csv.contains("stability,primary,inverse-n"));
@@ -532,6 +538,7 @@ fn test_run_entropy_extrapolation_without_bootstrap_uses_raw_subset_curve() {
             block_size: None,
             bootstrap_seed: None,
             tau: None,
+            show_progress: false,
         },
         None,
     )
