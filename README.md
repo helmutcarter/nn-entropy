@@ -47,7 +47,7 @@ Notes:
 - `--bootstrap-seed`: only used when bootstrap is enabled. When omitted, bootstrap sampling is nondeterministic.
 - `--output-csv`: no default. When provided with `--extrapolate`, writes the convergence table to a CSV file.
 
-Example extrapolation run:
+Example extrapolation run on toy dataset:
 
 ```bash
 cargo run --release tests/fixtures/test.parm7 tests/fixtures/test.nc --extrapolate --fit-model inverse-sqrt-n --subset-sizes 3,4,5 --output-csv convergence.csv
