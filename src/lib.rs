@@ -237,15 +237,14 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
     let kdtree: ImmutableKdTree<f64, 2> = ImmutableKdTree::new_from_slice(&points);
     let mut distance_total: f64 = 0.0;
     for point in points {
-        let mut result: f64 =
-            kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(2).unwrap())[1].distance;
-        if result == 0.0 {
-            if points_len < 3 {
-                return Err("need at least three distinct points for 2D nearest neighbor fallback".to_string());
-            }
-            result = kdtree.nearest_n::<SquaredEuclidean>(&point, NonZero::new(3).unwrap())[2]
-                .distance;
-        }
+        let neighbor_count = if points_len < 8 { points_len } else { 8 };
+        let result = kdtree
+            .nearest_n::<SquaredEuclidean>(&point, NonZero::new(neighbor_count).unwrap())
+            .into_iter()
+            .skip(1)
+            .map(|neighbor| neighbor.distance)
+            .find(|distance| *distance > 0.0)
+            .ok_or_else(|| "need at least two distinct points for 2D nearest neighbor".to_string())?;
         distance_total += result.sqrt().ln();
     }
     Ok(distance_total)
