@@ -48,6 +48,79 @@ fn test_two_d_nn_real_data() {
     assert_approx_eq!(ln_distance, expected_value);
 }
 
+#[test]
+fn test_calculate_entropy_order_two_matches_default() {
+    let data = vec![
+        vec![0.1, 0.4, 0.8, 1.1, 1.7],
+        vec![1.0, 1.3, 1.9, 2.2, 2.8],
+        vec![2.0, 2.4, 2.7, 3.1, 3.5],
+    ];
+    let default_entropy =
+        calculate_entropy_from_data(data.clone(), 5).expect("default entropy failed");
+    let order_two_entropy =
+        calculate_entropy_from_data_with_order(data, 5, 2).expect("order-2 entropy failed");
+
+    assert_approx_eq!(default_entropy, order_two_entropy);
+}
+
+#[test]
+fn test_third_order_entropy_for_three_coordinates_matches_joint_entropy() {
+    let coord_1 = vec![0.1, 0.4, 0.8, 1.1, 1.7];
+    let coord_2 = vec![1.0, 1.3, 1.9, 2.2, 2.8];
+    let coord_3 = vec![2.0, 2.4, 2.7, 3.1, 3.5];
+    let data = vec![coord_1.clone(), coord_2.clone(), coord_3.clone()];
+    let n_frames = data[0].len();
+    const EULER: f64 = 0.57721566490153;
+    let three_d_constant = ((n_frames as f64) * 4.0 * std::f64::consts::PI / 3.0).ln() + EULER;
+
+    let entropy =
+        calculate_entropy_from_data_with_order(data, n_frames, 3).expect("order-3 entropy failed");
+    let direct_joint_entropy = estimate_entropy_efficient(
+        calc_three_d_nn(&coord_1, &coord_2, &coord_3).expect("3D nearest neighbor failed") * 3.0,
+        (n_frames as f64).recip(),
+        three_d_constant,
+    );
+
+    assert_approx_eq!(entropy, direct_joint_entropy);
+}
+
+#[test]
+fn test_fourth_order_entropy_for_four_coordinates_matches_joint_entropy() {
+    let coord_1 = vec![0.1, 0.4, 0.8, 1.1, 1.7];
+    let coord_2 = vec![1.0, 1.3, 1.9, 2.2, 2.8];
+    let coord_3 = vec![2.0, 2.4, 2.7, 3.1, 3.5];
+    let coord_4 = vec![3.0, 3.6, 4.0, 4.5, 5.2];
+    let data = vec![
+        coord_1.clone(),
+        coord_2.clone(),
+        coord_3.clone(),
+        coord_4.clone(),
+    ];
+    let n_frames = data[0].len();
+    const EULER: f64 = 0.57721566490153;
+    let four_d_constant = ((n_frames as f64) * std::f64::consts::PI.powi(2) / 2.0).ln() + EULER;
+
+    let entropy =
+        calculate_entropy_from_data_with_order(data, n_frames, 4).expect("order-4 entropy failed");
+    let direct_joint_entropy = estimate_entropy_efficient(
+        calc_four_d_nn(&coord_1, &coord_2, &coord_3, &coord_4).expect("4D nearest neighbor failed")
+            * 4.0,
+        (n_frames as f64).recip(),
+        four_d_constant,
+    );
+
+    assert_approx_eq!(entropy, direct_joint_entropy);
+}
+
+#[test]
+fn test_unsupported_mie_order_is_invalid() {
+    let data = vec![vec![0.1, 0.4, 0.8], vec![1.0, 1.3, 1.9]];
+    let err = calculate_entropy_from_data_with_order(data, 3, 5)
+        .expect_err("expected unsupported MIE order error");
+
+    assert!(err.contains("unsupported MIE order"));
+}
+
 // Helper function to generate Guassian data
 pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     let normal = Normal::new(mean, std_dev).unwrap();

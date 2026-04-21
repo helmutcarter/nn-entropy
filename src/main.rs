@@ -2,13 +2,13 @@ use std::env;
 use std::path::Path;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::calculate_entropy_from_data;
+use nn_entropy::calculate_entropy_from_data_with_order;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4]",
             args[0]
         );
         std::process::exit(1);
@@ -20,6 +20,7 @@ fn main() {
     let mut start: Option<usize> = None;
     let mut stop: Option<usize> = None;
     let mut use_python = false;
+    let mut mie_order = 2;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -43,6 +44,16 @@ fn main() {
                 stop = Some(args[i + 1].parse::<usize>().expect("invalid --stop value"));
                 i += 2;
             }
+            "--mie-order" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--mie-order requires a value");
+                    std::process::exit(1);
+                }
+                mie_order = args[i + 1]
+                    .parse::<usize>()
+                    .expect("invalid --mie-order value");
+                i += 2;
+            }
             "--python" => {
                 use_python = true;
                 i += 1;
@@ -52,6 +63,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    if !(1..=4).contains(&mie_order) {
+        eprintln!("--mie-order must be 1, 2, 3, or 4");
+        std::process::exit(1);
     }
 
     if use_python {
@@ -120,7 +135,7 @@ fn main() {
     }
 
     let used_frames = one_d_data[0].len();
-    let entropy = match calculate_entropy_from_data(one_d_data, used_frames) {
+    let entropy = match calculate_entropy_from_data_with_order(one_d_data, used_frames, mie_order) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("Entropy calculation failed: {err}");

@@ -38,10 +38,53 @@ fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(),
     }
     Ok(())
 }
+
+fn binomial(n: usize, k: usize) -> usize {
+    if k > n {
+        return 0;
+    }
+    let k = k.min(n - k);
+    (0..k).fold(1usize, |acc, i| acc * (n - i) / (i + 1))
+}
+
+fn combination_from_rank<const K: usize>(mut rank: usize, n: usize) -> [usize; K] {
+    debug_assert!(K <= n);
+    debug_assert!(rank < binomial(n, K));
+
+    let mut combination = [0usize; K];
+    let mut start = 0;
+    for position in 0..K {
+        for candidate in start..n {
+            let remaining = K - position - 1;
+            let combinations_with_candidate = binomial(n - candidate - 1, remaining);
+            if rank < combinations_with_candidate {
+                combination[position] = candidate;
+                start = candidate + 1;
+                break;
+            }
+            rank -= combinations_with_candidate;
+        }
+    }
+    combination
+}
+
 pub fn calculate_entropy_from_data(
     one_d_data: Vec<Vec<f64>>,
     frames_end: usize,
 ) -> Result<f64, String> {
+    calculate_entropy_from_data_with_order(one_d_data, frames_end, 2)
+}
+
+pub fn calculate_entropy_from_data_with_order(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    mie_order: usize,
+) -> Result<f64, String> {
+    if !(1..=4).contains(&mie_order) {
+        return Err(format!(
+            "unsupported MIE order {mie_order}; supported orders are 1, 2, 3, and 4"
+        ));
+    }
     validate_one_d_data(&one_d_data, frames_end)?;
 
     let one_d_data = one_d_data
@@ -55,6 +98,8 @@ pub fn calculate_entropy_from_data(
     const EULER: f64 = 0.57721566490153;
     let one_d_constant = ((n_frames as f64) * 2.0).ln() + EULER;
     let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+    let three_d_constant = ((n_frames as f64) * 4.0 * std::f64::consts::PI / 3.0).ln() + EULER;
+    let four_d_constant = ((n_frames as f64) * std::f64::consts::PI.powi(2) / 2.0).ln() + EULER;
 
     let one_d_distances_total: f64 = one_d_data
         .par_iter()
@@ -68,20 +113,20 @@ pub fn calculate_entropy_from_data(
         // estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
         estimate_entropy_efficient(one_d_distances_total, (n_frames as f64).recip(), one_d_constant*degrees_freedom as f64);
 
-    let two_d_degrees_freedom = (0..degrees_freedom)
-        .flat_map(|i| (i + 1)..degrees_freedom)
-        .count();
+    let effective_order = mie_order.min(degrees_freedom);
+    if effective_order == 1 {
+        return Ok(one_d_entropy);
+    }
 
-    let two_d_distances_total: f64 = (0..degrees_freedom)
+    let two_d_degrees_freedom = binomial(degrees_freedom, 2);
+
+    let two_d_distances_total: f64 = (0..two_d_degrees_freedom)
         .into_par_iter()
         .try_fold(
             || 0.0,
-            |acc, i| {
-                let mut sum = 0.0;
-                for j in (i + 1)..degrees_freedom {
-                    sum += calc_two_d_nn(&one_d_data[i], &one_d_data[j])?;
-                }
-                Ok::<f64, String>(acc + sum)
+            |acc, rank| {
+                let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
+                Ok::<f64, String>(acc + calc_two_d_nn(&one_d_data[i], &one_d_data[j])?)
             },
         )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
@@ -90,7 +135,75 @@ pub fn calculate_entropy_from_data(
     // estimate_entropy(two_d_distances_total * 2.0,n_frames,two_d_constant,two_d_degrees_freedom);
     estimate_entropy_efficient(two_d_distances_total * 2.0,(n_frames as f64).recip(), two_d_constant*two_d_degrees_freedom as f64);
 
-    Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy)
+    if effective_order == 2 {
+        return Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy);
+    }
+
+    let three_d_degrees_freedom = binomial(degrees_freedom, 3);
+
+    let three_d_distances_total: f64 = (0..three_d_degrees_freedom)
+        .into_par_iter()
+        .try_fold(
+            || 0.0,
+            |acc, rank| {
+                let [i, j, k] = combination_from_rank::<3>(rank, degrees_freedom);
+                Ok::<f64, String>(
+                    acc + calc_three_d_nn(&one_d_data[i], &one_d_data[j], &one_d_data[k])?,
+                )
+            },
+        )
+        .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
+
+    let three_d_entropy = estimate_entropy_efficient(
+        three_d_distances_total * 3.0,
+        (n_frames as f64).recip(),
+        three_d_constant * three_d_degrees_freedom as f64,
+    );
+
+    let one_d_coefficient = ((degrees_freedom - 2) * (degrees_freedom - 3)) as f64 / 2.0;
+    let two_d_coefficient = (degrees_freedom - 3) as f64;
+
+    if effective_order == 3 {
+        return Ok(
+            three_d_entropy - two_d_coefficient * two_d_entropy + one_d_coefficient * one_d_entropy
+        );
+    }
+
+    let four_d_degrees_freedom = binomial(degrees_freedom, 4);
+
+    let four_d_distances_total: f64 = (0..four_d_degrees_freedom)
+        .into_par_iter()
+        .try_fold(
+            || 0.0,
+            |acc, rank| {
+                let [i, j, k, l] = combination_from_rank::<4>(rank, degrees_freedom);
+                Ok::<f64, String>(
+                    acc + calc_four_d_nn(
+                        &one_d_data[i],
+                        &one_d_data[j],
+                        &one_d_data[k],
+                        &one_d_data[l],
+                    )?,
+                )
+            },
+        )
+        .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
+
+    let four_d_entropy = estimate_entropy_efficient(
+        four_d_distances_total * 4.0,
+        (n_frames as f64).recip(),
+        four_d_constant * four_d_degrees_freedom as f64,
+    );
+
+    let one_d_coefficient =
+        ((degrees_freedom - 2) * (degrees_freedom - 3) * (degrees_freedom - 4)) as f64 / 6.0;
+    let two_d_coefficient = ((degrees_freedom - 3) * (degrees_freedom - 4)) as f64 / 2.0;
+    let three_d_coefficient = (degrees_freedom - 4) as f64;
+
+    Ok(
+        four_d_entropy - three_d_coefficient * three_d_entropy + two_d_coefficient * two_d_entropy
+            - one_d_coefficient * one_d_entropy,
+    )
 }
 
 pub fn estimate_coordinate_entropy_rust(
@@ -244,16 +357,61 @@ pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
 }
 
 pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, String> {
-    let mut points: Vec<[f64; 2]> = Vec::with_capacity(points_1.len());
-    for (point_1, point_2) in points_1.iter().zip(points_2) {
-        points.push([*point_1, *point_2]);
-    }
-    let points_len = points.len();
+    calc_joint_nn([points_1.as_slice(), points_2.as_slice()])
+}
+
+pub fn calc_three_d_nn(
+    points_1: &Vec<f64>,
+    points_2: &Vec<f64>,
+    points_3: &Vec<f64>,
+) -> Result<f64, String> {
+    calc_joint_nn([
+        points_1.as_slice(),
+        points_2.as_slice(),
+        points_3.as_slice(),
+    ])
+}
+
+pub fn calc_four_d_nn(
+    points_1: &Vec<f64>,
+    points_2: &Vec<f64>,
+    points_3: &Vec<f64>,
+    points_4: &Vec<f64>,
+) -> Result<f64, String> {
+    calc_joint_nn([
+        points_1.as_slice(),
+        points_2.as_slice(),
+        points_3.as_slice(),
+        points_4.as_slice(),
+    ])
+}
+
+fn calc_joint_nn<const K: usize>(coordinates: [&[f64]; K]) -> Result<f64, String> {
+    let points_len = coordinates[0].len();
     if points_len < 2 {
-        return Err("need at least two points for 2D nearest neighbor".to_string());
+        return Err(format!(
+            "need at least two points for {K}D nearest neighbor"
+        ));
+    }
+    if coordinates
+        .iter()
+        .any(|coordinate| coordinate.len() != points_len)
+    {
+        return Err(format!(
+            "all coordinate series must have equal length for {K}D nearest neighbor"
+        ));
     }
 
-    let kdtree: ImmutableKdTree<f64, 2> = ImmutableKdTree::new_from_slice(&points);
+    let mut points: Vec<[f64; K]> = Vec::with_capacity(points_len);
+    for frame_idx in 0..points_len {
+        let mut point = [0.0; K];
+        for dimension_idx in 0..K {
+            point[dimension_idx] = coordinates[dimension_idx][frame_idx];
+        }
+        points.push(point);
+    }
+
+    let kdtree: ImmutableKdTree<f64, K> = ImmutableKdTree::new_from_slice(&points);
     let mut distance_total: f64 = 0.0;
     for point in points {
         let neighbor_count = if points_len < 8 { points_len } else { 8 };
@@ -264,7 +422,7 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
             .map(|neighbor| neighbor.distance)
             .find(|distance| *distance > 0.0)
             .ok_or_else(|| {
-                "need at least two distinct points for 2D nearest neighbor".to_string()
+                format!("need at least two distinct points for {K}D nearest neighbor")
             })?;
         distance_total += result.sqrt().ln();
     }
@@ -336,6 +494,61 @@ pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
         all_data.push(internal_coordinate_data);
     }
     all_data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{binomial, combination_from_rank};
+
+    #[test]
+    fn binomial_counts_combinations() {
+        assert_eq!(binomial(5, 3), 10);
+        assert_eq!(binomial(6, 4), 15);
+        assert_eq!(binomial(4, 5), 0);
+    }
+
+    #[test]
+    fn combination_ranks_cover_lexicographic_order() {
+        let triples = (0..binomial(5, 3))
+            .map(|rank| combination_from_rank::<3>(rank, 5))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            triples,
+            vec![
+                [0, 1, 2],
+                [0, 1, 3],
+                [0, 1, 4],
+                [0, 2, 3],
+                [0, 2, 4],
+                [0, 3, 4],
+                [1, 2, 3],
+                [1, 2, 4],
+                [1, 3, 4],
+                [2, 3, 4],
+            ]
+        );
+    }
+
+    #[test]
+    fn combination_ranks_cover_pair_terms() {
+        let pairs = (0..binomial(4, 2))
+            .map(|rank| combination_from_rank::<2>(rank, 4))
+            .collect::<Vec<_>>();
+
+        assert_eq!(pairs, vec![[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]]);
+    }
+
+    #[test]
+    fn combination_ranks_cover_fourth_order_terms() {
+        let fourth_order_terms = (0..binomial(6, 4))
+            .map(|rank| combination_from_rank::<4>(rank, 6))
+            .collect::<Vec<_>>();
+
+        assert_eq!(fourth_order_terms.len(), 15);
+        assert_eq!(fourth_order_terms[0], [0, 1, 2, 3]);
+        assert_eq!(fourth_order_terms[14], [2, 3, 4, 5]);
+    }
 }
 
 pub fn cross_product(b1: [f64; 3], b2: [f64; 3]) -> [f64; 3] {

@@ -2,10 +2,10 @@
 
 Estimate the configurational entropy of a molecular system, with a Rust library, CLI, and Python bindings.
 
-This crate provides non-parametric entropy estimation using the nearest neighbor method with first order mutual information expansion on internal coordinates (i.e., bonds lengths, bond angles, and torsion angles) with built-in conversion from MD trajectory files.
+This crate provides non-parametric entropy estimation using the nearest neighbor method with mutual information expansion on internal coordinates (i.e., bonds lengths, bond angles, and torsion angles) with built-in conversion from MD trajectory files.
 
 ## Features
-- Rust library API for first order entropy, per-coordinate entropy, and mutual information estimates.
+- Rust library API for MIE entropy up to fourth order, per-coordinate entropy, and mutual information estimates.
 - CLI that reads `.parm7` + `.nc` and converts to internal coordinates and prints total configurational entropy.
 - Python bindings via `pyo3` for in-memory arrays or direct file-based calculation.
 - Entropy calculations parallelized with `rayon`.
@@ -23,7 +23,7 @@ cargo build --release
 ## CLI usage
 
 ```bash
-cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] 
+cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4]
 ```
 
 Example:
@@ -35,6 +35,7 @@ cargo run --release <path_to_parm7> <path_to_nc>
 Notes:
 - `--stop` limits the number of frames read to N.
 - `--start` skips the first N frames
+- `--mie-order` selects the expansion order. The default is 2, matching previous behavior.
 
 ## Rust library usage
 
@@ -46,16 +47,17 @@ let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
 ```
 
 Other helpers:
+- `calculate_entropy_from_data_with_order` for explicit MIE order 1, 2, 3, or 4.
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
 
 ## Python bindings
 
 The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) with:
-- `estimate_mie_entropy(data)`
+- `estimate_mie_entropy(data, mie_order=None)`
 - `estimate_coordinate_entropy(data)`
 - `estimate_coordinate_mutual_information(data)`
-- `estimate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
+- `estimate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None, mie_order=None)`
 
 A typical build workflow uses `maturin`:
 

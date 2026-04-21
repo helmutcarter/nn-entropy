@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use crate::bat_library::InternalCoordinates;
-use crate::calculate_entropy_from_data;
+use crate::calculate_entropy_from_data_with_order;
 use crate::estimate_coordinate_entropy_rust;
 use crate::estimate_coordinate_mutual_information_rust;
 use numpy::PyReadonlyArray2;
@@ -12,12 +12,12 @@ fn to_py_err<E: std::fmt::Display>(err: E) -> PyErr {
 }
 
 /// Python wrapper around the main entropy function
-#[pyfunction]
-fn estimate_mie_entropy(data: PyReadonlyArray2<f64>) -> PyResult<f64> {
+#[pyfunction(signature = (data, mie_order=None))]
+fn estimate_mie_entropy(data: PyReadonlyArray2<f64>, mie_order: Option<usize>) -> PyResult<f64> {
     let array = data.as_array();
     let one_d_data: Vec<Vec<f64>> = array.outer_iter().map(|row| row.to_vec()).collect();
     let frames_end = array.shape()[1]; // use all frames
-    calculate_entropy_from_data(one_d_data, frames_end)
+    calculate_entropy_from_data_with_order(one_d_data, frames_end, mie_order.unwrap_or(2))
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -43,13 +43,14 @@ fn estimate_coordinate_mutual_information(data: PyReadonlyArray2<f64>) -> PyResu
 }
 
 /// Python wrapper to read .parm7 + .nc and compute entropy directly
-#[pyfunction]
+#[pyfunction(signature = (top_path, traj_path, start=None, stop=None, torsions_only=None, mie_order=None))]
 fn estimate_mie_entropy_from_files(
     top_path: &str,
     traj_path: &str,
     start: Option<usize>,
     stop: Option<usize>,
     torsions_only: Option<bool>,
+    mie_order: Option<usize>,
 ) -> PyResult<f64> {
     let top = Path::new(top_path);
     let traj = Path::new(traj_path);
@@ -82,7 +83,7 @@ fn estimate_mie_entropy_from_files(
     }
 
     let used_frames = one_d_data[0].len();
-    calculate_entropy_from_data(one_d_data, used_frames)
+    calculate_entropy_from_data_with_order(one_d_data, used_frames, mie_order.unwrap_or(2))
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
