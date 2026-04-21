@@ -32,11 +32,7 @@ fn main() {
                     eprintln!("--start requires a value");
                     std::process::exit(1);
                 }
-                start = Some(
-                    args[i + 1]
-                        .parse::<usize>()
-                        .expect("invalid --start value"),
-                );
+                start = Some(args[i + 1].parse::<usize>().expect("invalid --start value"));
                 i += 2;
             }
             "--stop" => {
@@ -44,11 +40,7 @@ fn main() {
                     eprintln!("--stop requires a value");
                     std::process::exit(1);
                 }
-                stop = Some(
-                    args[i + 1]
-                        .parse::<usize>()
-                        .expect("invalid --stop value"),
-                );
+                stop = Some(args[i + 1].parse::<usize>().expect("invalid --stop value"));
                 i += 2;
             }
             "--python" => {
@@ -94,8 +86,8 @@ fn main() {
         return;
     }
 
-    let mut internal = InternalCoordinates::new(top_path)
-        .expect("failed to build BAT list from topology");
+    let mut internal =
+        InternalCoordinates::new(top_path).expect("failed to build BAT list from topology");
     internal
         .calculate_internal_coords(traj_path, stop.unwrap_or(usize::MAX), torsions_only)
         .expect("failed to read trajectory or compute BAT coordinates");
@@ -110,11 +102,7 @@ fn main() {
         eprintln!("--start is beyond available frames.");
         std::process::exit(1);
     }
-    let dim = internal
-        .int_coords
-        .get(0)
-        .map(|row| row.len())
-        .unwrap_or(0);
+    let dim = internal.int_coords.get(0).map(|row| row.len()).unwrap_or(0);
     if dim == 0 {
         eprintln!("No internal coordinates were generated.");
         std::process::exit(1);

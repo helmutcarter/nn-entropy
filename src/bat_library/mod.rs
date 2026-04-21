@@ -137,9 +137,17 @@ fn parse_prmtop_from_pointers(
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let atom_types = if let Some(sec) = sections.get("AMBER_ATOM_TYPE") {
-        sec.1.iter().take(natom).map(|s| s.trim().to_string()).collect()
+        sec.1
+            .iter()
+            .take(natom)
+            .map(|s| s.trim().to_string())
+            .collect()
     } else if let Some(sec) = sections.get("ATOM_NAME") {
-        sec.1.iter().take(natom).map(|s| s.trim().to_string()).collect()
+        sec.1
+            .iter()
+            .take(natom)
+            .map(|s| s.trim().to_string())
+            .collect()
     } else {
         return Err("missing AMBER_ATOM_TYPE and ATOM_NAME sections".into());
     };
@@ -234,11 +242,7 @@ impl NetcdfReader {
         let dims = Self::read_dim_list(&mut file)?;
         Self::skip_attr_list(&mut file)?;
         let vars = Self::read_var_list(&mut file, version, &dims)?;
-        let record_size = vars
-            .iter()
-            .filter(|v| v.is_record)
-            .map(|v| v.vsize)
-            .sum();
+        let record_size = vars.iter().filter(|v| v.is_record).map(|v| v.vsize).sum();
 
         Ok(NetcdfReader {
             file,
@@ -269,11 +273,7 @@ impl NetcdfReader {
     ) -> Result<Vec<Vec<[f64; 3]>>> {
         let var = self.coordinates_var()?;
 
-        let dims: Vec<u64> = var
-            .dim_ids
-            .iter()
-            .map(|&i| self.dims[i].len)
-            .collect();
+        let dims: Vec<u64> = var.dim_ids.iter().map(|&i| self.dims[i].len).collect();
         if dims.len() < 2 {
             return Err("coordinates variable has too few dimensions".into());
         }
@@ -343,11 +343,7 @@ impl NetcdfReader {
             return Err("coordinates variable is not float".into());
         }
 
-        let dims: Vec<u64> = var
-            .dim_ids
-            .iter()
-            .map(|&i| self.dims[i].len)
-            .collect();
+        let dims: Vec<u64> = var.dim_ids.iter().map(|&i| self.dims[i].len).collect();
         if dims.len() < 2 {
             return Err("coordinates variable has too few dimensions".into());
         }
@@ -549,11 +545,7 @@ impl NetcdfReader {
 
     fn pad4(n: u64) -> u64 {
         let rem = n % 4;
-        if rem == 0 {
-            n
-        } else {
-            n + (4 - rem)
-        }
+        if rem == 0 { n } else { n + (4 - rem) }
     }
 }
 
@@ -570,11 +562,7 @@ fn sort_atoms_by_mass(atoms: &[usize], masses: &[f64], reverse: bool) -> Vec<usi
         let ma = masses[a];
         let mb = masses[b];
         if ma == mb {
-            if reverse {
-                b.cmp(&a)
-            } else {
-                a.cmp(&b)
-            }
+            if reverse { b.cmp(&a) } else { a.cmp(&b) }
         } else if reverse {
             mb.partial_cmp(&ma).unwrap()
         } else {
@@ -662,7 +650,9 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
                 for &a2 in a2_sorted.iter() {
                     let a3_list: Vec<usize> = adjacency[a2]
                         .iter()
-                        .filter(|n| **n != a1 && fragment_set.contains(n) && selected_atoms.contains(n))
+                        .filter(|n| {
+                            **n != a1 && fragment_set.contains(n) && selected_atoms.contains(n)
+                        })
                         .copied()
                         .collect();
                     let a3_sorted = sort_atoms_by_mass(&a3_list, masses, false);
@@ -687,7 +677,11 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
         angles.push([t[0], t[1], t[2]]);
     }
 
-    Ok(Bat { root, torsions, angles })
+    Ok(Bat {
+        root,
+        torsions,
+        angles,
+    })
 }
 
 fn bond_calc(a1: [f64; 3], a2: [f64; 3]) -> f64 {
@@ -734,9 +728,7 @@ fn bond_calc_f32(a1: [f32; 3], a2: [f32; 3]) -> f64 {
     let dx = a1[0] - a2[0];
     let dy = a1[1] - a2[1];
     let dz = a1[2] - a2[2];
-    let sum = (dx as f64) * (dx as f64)
-        + (dy as f64) * (dy as f64)
-        + (dz as f64) * (dz as f64);
+    let sum = (dx as f64) * (dx as f64) + (dy as f64) * (dy as f64) + (dz as f64) * (dz as f64);
     sum.sqrt()
 }
 
@@ -849,11 +841,8 @@ fn int_c_f32(bat_list: &[Vec<usize>], traj: &[Vec<[f32; 3]>]) -> Vec<Vec<f64>> {
             if entry.len() == 2 {
                 int_coords[i][j] = bond_calc_f32(traj[i][entry[0]], traj[i][entry[1]]);
             } else if entry.len() == 3 {
-                int_coords[i][j] = angle_calc_f32(
-                    traj[i][entry[0]],
-                    traj[i][entry[1]],
-                    traj[i][entry[2]],
-                );
+                int_coords[i][j] =
+                    angle_calc_f32(traj[i][entry[0]], traj[i][entry[1]], traj[i][entry[2]]);
             } else if entry.len() == 4 {
                 int_coords[i][j] = torsion_calc_f32(
                     traj[i][entry[0]],
@@ -918,7 +907,12 @@ impl InternalCoordinates {
                 }
             }
             atom_num += fragment.len();
-            bat_list.extend(build_bat_list(&fragment, &adjacency, &hydrogens, &prmtop.masses)?);
+            bat_list.extend(build_bat_list(
+                &fragment,
+                &adjacency,
+                &hydrogens,
+                &prmtop.masses,
+            )?);
         }
 
         let dim = bat_list.len();

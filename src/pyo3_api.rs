@@ -1,11 +1,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
-use numpy::PyReadonlyArray2;
-use pyo3::prelude::*;
-use std::path::Path;
+use crate::bat_library::InternalCoordinates;
 use crate::calculate_entropy_from_data;
 use crate::estimate_coordinate_entropy_rust;
 use crate::estimate_coordinate_mutual_information_rust;
-use crate::bat_library::InternalCoordinates;
+use numpy::PyReadonlyArray2;
+use pyo3::prelude::*;
+use std::path::Path;
 
 fn to_py_err<E: std::fmt::Display>(err: E) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(err.to_string())

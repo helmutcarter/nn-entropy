@@ -1,10 +1,10 @@
 use kiddo::ImmutableKdTree;
 use kiddo::SquaredEuclidean;
-use std::num::NonZero;
+use rand_distr::{Distribution, Normal};
+use rayon::prelude::*;
 use std::fs::File;
 use std::io::ErrorKind;
-use rand_distr::{Normal, Distribution};
-use rayon::prelude::*;
+use std::num::NonZero;
 
 pub mod bat_library;
 pub mod pyo3_api;
@@ -58,7 +58,10 @@ pub fn calculate_entropy_from_data(
 
     let one_d_distances_total: f64 = one_d_data
         .par_iter()
-        .try_fold(|| 0.0, |acc, ic| Ok::<f64, String>(acc + calc_one_d_nn(ic)?))
+        .try_fold(
+            || 0.0,
+            |acc, ic| Ok::<f64, String>(acc + calc_one_d_nn(ic)?),
+        )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
     let one_d_entropy =
@@ -71,16 +74,19 @@ pub fn calculate_entropy_from_data(
 
     let two_d_distances_total: f64 = (0..degrees_freedom)
         .into_par_iter()
-        .try_fold(|| 0.0, |acc, i| {
-            let mut sum = 0.0;
-            for j in (i + 1)..degrees_freedom {
-                sum += calc_two_d_nn(&one_d_data[i], &one_d_data[j])?;
-            }
-            Ok::<f64, String>(acc + sum)
-        })
+        .try_fold(
+            || 0.0,
+            |acc, i| {
+                let mut sum = 0.0;
+                for j in (i + 1)..degrees_freedom {
+                    sum += calc_two_d_nn(&one_d_data[i], &one_d_data[j])?;
+                }
+                Ok::<f64, String>(acc + sum)
+            },
+        )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
-    let two_d_entropy = 
+    let two_d_entropy =
     // estimate_entropy(two_d_distances_total * 2.0,n_frames,two_d_constant,two_d_degrees_freedom);
     estimate_entropy_efficient(two_d_distances_total * 2.0,(n_frames as f64).recip(), two_d_constant*two_d_degrees_freedom as f64);
 
@@ -117,7 +123,9 @@ pub fn estimate_coordinate_entropy_rust(
     let one_d_entropies: Vec<f64> = one_d_distances
         .iter()
         // .map(|&distance| estimate_entropy(distance, n_frames, one_d_constant, 1))
-        .map(|&distance| estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant))
+        .map(|&distance| {
+            estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
+        })
         .collect();
 
     Ok(one_d_entropies)
@@ -161,7 +169,9 @@ pub fn estimate_coordinate_mutual_information_rust(
     let two_d_entropies: Vec<f64> = two_d_distances
         .iter()
         // .map(|&distance| estimate_entropy(distance * 2.0, n_frames, two_d_constant, 1))
-        .map(|&distance| estimate_entropy_efficient(distance * 2.0, (n_frames as f64).recip(), two_d_constant))
+        .map(|&distance| {
+            estimate_entropy_efficient(distance * 2.0, (n_frames as f64).recip(), two_d_constant)
+        })
         .collect();
     Ok(two_d_entropies)
 }
@@ -170,30 +180,39 @@ pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
     let mut unique_points = points.to_vec();
     unique_points.dedup();
     unique_points.sort_by(|a, b| a.total_cmp(b));
-    let total_unique_points = unique_points.len();  
+    let total_unique_points = unique_points.len();
     if total_unique_points < 2 {
         return Err("coordinate series must contain at least two unique values".to_string());
     }
     // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
     let mut distance_total: f64 = 0.0;
 
-    for point in points 
-    {    
-        let index = unique_points.binary_search_by(|probe| probe.total_cmp(point)).map_err(|_| {
-            "coordinate value not found in unique list; input may contain NaN".to_string()
-        })?;
+    for point in points {
+        let index = unique_points
+            .binary_search_by(|probe| probe.total_cmp(point))
+            .map_err(|_| {
+                "coordinate value not found in unique list; input may contain NaN".to_string()
+            })?;
         if index == 0 {
-            distance_total += f64::min(distance(*point, unique_points[total_unique_points-1]),
-                            distance(*point, unique_points[index+1])).ln();
+            distance_total += f64::min(
+                distance(*point, unique_points[total_unique_points - 1]),
+                distance(*point, unique_points[index + 1]),
+            )
+            .ln();
+        } else if index == total_unique_points - 1 {
+            distance_total += f64::min(
+                distance(*point, unique_points[index - 1]),
+                distance(*point, unique_points[0]),
+            )
+            .ln();
+        } else {
+            distance_total += f64::min(
+                distance(*point, unique_points[index - 1]),
+                distance(*point, unique_points[index + 1]),
+            )
+            .ln();
         }
-        else if index == total_unique_points-1 {
-            distance_total += f64::min(distance(*point, unique_points[index-1]),
-                            distance(*point, unique_points[0])).ln(); 
-        }
-        else {
-            distance_total += f64::min(distance(*point, unique_points[index-1]),
-                            distance(*point, unique_points[index+1])).ln();
-                        }}
+    }
     Ok(distance_total)
 }
 
@@ -212,7 +231,7 @@ pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
     let kdtree: ImmutableKdTree<f64, 1> = ImmutableKdTree::new_from_slice(&unique_point_vec_array);
 
     // println!("{:?}", unique_points);
-    // let total_unique_points = unique_points.len();  
+    // let total_unique_points = unique_points.len();
     // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
     let mut distance_total: f64 = 0.0;
 
@@ -244,7 +263,9 @@ pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, St
             .skip(1)
             .map(|neighbor| neighbor.distance)
             .find(|distance| *distance > 0.0)
-            .ok_or_else(|| "need at least two distinct points for 2D nearest neighbor".to_string())?;
+            .ok_or_else(|| {
+                "need at least two distinct points for 2D nearest neighbor".to_string()
+            })?;
         distance_total += result.sqrt().ln();
     }
     Ok(distance_total)
@@ -259,16 +280,24 @@ pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
 fn distance(first_point: f64, second_points: f64) -> f64 {
     (first_point - second_points).abs()
 }
-pub fn estimate_entropy(nn_distance: f64, n_frames: usize, constant: f64, n_internal_coords: usize) -> f64 {
+pub fn estimate_entropy(
+    nn_distance: f64,
+    n_frames: usize,
+    constant: f64,
+    n_internal_coords: usize,
+) -> f64 {
     // println!("{constant}");
-    (nn_distance/(n_frames as f64)) + constant*(n_internal_coords as f64)
+    (nn_distance / (n_frames as f64)) + constant * (n_internal_coords as f64)
 }
 
-pub fn estimate_entropy_efficient(nn_distance: f64, reciprocal_n_frames: f64, constant: f64) -> f64 {
+pub fn estimate_entropy_efficient(
+    nn_distance: f64,
+    reciprocal_n_frames: f64,
+    constant: f64,
+) -> f64 {
     // Reduces number of instructions used, and uses fused multiply add when enabled
     if cfg!(feature = "fma") {
         nn_distance.mul_add(reciprocal_n_frames, constant)
-
     } else {
         nn_distance * reciprocal_n_frames + constant
     }
@@ -289,15 +318,19 @@ pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
             }
         },
     };
-    let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(file);
-    
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(file);
+
     for result in reader.records() {
         let mut internal_coordinate_data: Vec<f64> = Vec::new();
         match result {
-            Ok(record) => for entry in record.iter() {
-                let point: f64 = entry.parse().unwrap();
-                internal_coordinate_data.push(point);
-                },
+            Ok(record) => {
+                for entry in record.iter() {
+                    let point: f64 = entry.parse().unwrap();
+                    internal_coordinate_data.push(point);
+                }
+            }
             Err(e) => println!("Error reading record: {:?}", e),
         }
         all_data.push(internal_coordinate_data);
@@ -323,16 +356,18 @@ fn dot_product(array_1: [f64; 3], array_2: [f64; 3]) -> f64 {
 
 pub fn calc_bond(atom_1: [f64; 3], atom_2: [f64; 3]) -> f64 {
     // sqSum = (a1[0]-a2[0])**2 + (a1[1]-a2[1])**2 + (a1[2]-a2[2])**2
-    let square_sum = (atom_1[0]-atom_2[0]).powi(2) + (atom_1[1]-atom_2[1]).powi(2) + (atom_1[2]-atom_2[2]).powi(2);
-    
+    let square_sum = (atom_1[0] - atom_2[0]).powi(2)
+        + (atom_1[1] - atom_2[1]).powi(2)
+        + (atom_1[2] - atom_2[2]).powi(2);
+
     // dist = math.sqrt(sqSum)
     // return dist
     square_sum.sqrt()
 }
 
 pub fn calc_angle(a1: [f64; 3], a2: [f64; 3], a3: [f64; 3]) -> f64 {
-    let v1 = [(a1[0]-a2[0]),(a1[1]-a2[1]),(a1[2]-a2[2])];
-    let v2 = [(a3[0]-a2[0]),(a3[1]-a2[1]),(a3[2]-a2[2])];
+    let v1 = [(a1[0] - a2[0]), (a1[1] - a2[1]), (a1[2] - a2[2])];
+    let v2 = [(a3[0] - a2[0]), (a3[1] - a2[1]), (a3[2] - a2[2])];
 
     // v1Mag = math.sqrt((v1[0])**2 + (v1[1])**2 + (v1[2])**2)
     let vector_1_magnitude = (v1[0].powi(2) + v1[1].powi(2) + v1[2].powi(2)).sqrt();
@@ -343,16 +378,28 @@ pub fn calc_angle(a1: [f64; 3], a2: [f64; 3], a3: [f64; 3]) -> f64 {
     // let dot: f64 = (v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]);
     let dot: f64 = dot_product(v1, v2);
 
-    let v1v2_mag = vector_1_magnitude*vector_2_magnitude;
+    let v1v2_mag = vector_1_magnitude * vector_2_magnitude;
 
     // angle = math.acos(dot/v1v2Mag)
     // return angle
-    (dot/v1v2_mag).acos()
+    (dot / v1v2_mag).acos()
 }
 pub fn calc_torsion(atom_1: [f64; 3], atom_2: [f64; 3], atom_3: [f64; 3], atom_4: [f64; 3]) -> f64 {
-    let bond_1: [f64; 3] = [atom_1[0] - atom_2[0], atom_1[1] - atom_2[1], atom_1[2] - atom_2[2]];
-    let bond_2: [f64; 3] = [atom_2[0] - atom_3[0], atom_2[1] - atom_3[1], atom_2[2] - atom_3[2]];
-    let bond_3: [f64; 3] = [atom_3[0] - atom_4[0], atom_3[1] - atom_4[1], atom_3[2] - atom_4[2]];
+    let bond_1: [f64; 3] = [
+        atom_1[0] - atom_2[0],
+        atom_1[1] - atom_2[1],
+        atom_1[2] - atom_2[2],
+    ];
+    let bond_2: [f64; 3] = [
+        atom_2[0] - atom_3[0],
+        atom_2[1] - atom_3[1],
+        atom_2[2] - atom_3[2],
+    ];
+    let bond_3: [f64; 3] = [
+        atom_3[0] - atom_4[0],
+        atom_3[1] - atom_4[1],
+        atom_3[2] - atom_4[2],
+    ];
 
     let cross_1: [f64; 3] = cross_product(bond_2, bond_3);
     let cross_2: [f64; 3] = cross_product(bond_1, bond_2);
@@ -376,14 +423,23 @@ pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>)
         let mut frame_coords: Vec<f64> = Vec::new();
         for j in 0..n_int_coords as usize {
             if bat_list[j].len() == 2 {
-                frame_coords.push(calc_bond(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]]));
+                frame_coords.push(calc_bond(traj[i][bat_list[j][0]], traj[i][bat_list[j][1]]));
                 // println!("{:?}", j);
             }
             if bat_list[j].len() == 3 {
-                frame_coords.push(calc_angle(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]]));
+                frame_coords.push(calc_angle(
+                    traj[i][bat_list[j][0]],
+                    traj[i][bat_list[j][1]],
+                    traj[i][bat_list[j][2]],
+                ));
             }
             if bat_list[j].len() == 4 {
-                frame_coords.push(calc_torsion(traj[i][bat_list[j][0]],traj[i][bat_list[j][1]],traj[i][bat_list[j][2]], traj[i][bat_list[j][3]]));
+                frame_coords.push(calc_torsion(
+                    traj[i][bat_list[j][0]],
+                    traj[i][bat_list[j][1]],
+                    traj[i][bat_list[j][2]],
+                    traj[i][bat_list[j][3]],
+                ));
             }
         }
         internal_coords.push(frame_coords);
