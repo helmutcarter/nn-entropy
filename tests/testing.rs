@@ -64,6 +64,56 @@ fn test_calculate_entropy_order_two_matches_default() {
 }
 
 #[test]
+fn test_coordinate_mutual_information_returns_pairwise_mi() {
+    let coord_1 = vec![0.1, 0.4, 0.8, 1.1, 1.7];
+    let coord_2 = vec![1.0, 1.3, 1.9, 2.2, 2.8];
+    let data = vec![coord_1.clone(), coord_2.clone()];
+    let n_frames = data[0].len();
+    const EULER: f64 = 0.57721566490153;
+    let one_d_constant = ((n_frames as f64) * 2.0).ln() + EULER;
+    let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+
+    let pairwise_mi = estimate_coordinate_mutual_information_rust(data, n_frames)
+        .expect("coordinate mutual information failed");
+    let entropy_1 = estimate_entropy_efficient(
+        calc_one_d_nn(&coord_1).expect("1D nearest neighbor failed"),
+        (n_frames as f64).recip(),
+        one_d_constant,
+    );
+    let entropy_2 = estimate_entropy_efficient(
+        calc_one_d_nn(&coord_2).expect("1D nearest neighbor failed"),
+        (n_frames as f64).recip(),
+        one_d_constant,
+    );
+    let joint_entropy = estimate_entropy_efficient(
+        calc_two_d_nn(&coord_1, &coord_2).expect("2D nearest neighbor failed") * 2.0,
+        (n_frames as f64).recip(),
+        two_d_constant,
+    );
+
+    assert_eq!(pairwise_mi.len(), 1);
+    assert_approx_eq!(pairwise_mi[0], entropy_1 + entropy_2 - joint_entropy);
+}
+
+#[test]
+fn test_coordinate_mie_entropy_sums_to_total_second_order_entropy() {
+    let data = vec![
+        vec![0.1, 0.4, 0.8, 1.1, 1.7],
+        vec![1.0, 1.3, 1.9, 2.2, 2.8],
+        vec![2.0, 2.4, 2.7, 3.1, 3.5],
+    ];
+    let n_frames = data[0].len();
+
+    let coordinate_mie_entropy = estimate_coordinate_mie_entropy_rust(data.clone(), n_frames)
+        .expect("coordinate MIE entropy failed");
+    let total_from_coordinates: f64 = coordinate_mie_entropy.iter().sum();
+    let total_entropy =
+        calculate_entropy_from_data_with_order(data, n_frames, 2).expect("order-2 entropy failed");
+
+    assert_approx_eq!(total_from_coordinates, total_entropy);
+}
+
+#[test]
 fn test_third_order_entropy_for_three_coordinates_matches_joint_entropy() {
     let coord_1 = vec![0.1, 0.4, 0.8, 1.1, 1.7];
     let coord_2 = vec![1.0, 1.3, 1.9, 2.2, 2.8];

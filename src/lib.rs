@@ -259,17 +259,32 @@ pub fn estimate_coordinate_mutual_information_rust(
     let degrees_freedom: usize = one_d_data.len();
 
     const EULER: f64 = 0.57721566490153;
+    let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
     let two_d_constant: f64 = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+
+    let one_d_entropies = one_d_data
+        .par_iter()
+        .map(|ic| {
+            calc_one_d_nn(ic).map(|distance| {
+                estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let two_d_degrees_freedom = (0..degrees_freedom)
         .flat_map(|i| (i + 1)..degrees_freedom)
         .count();
 
-    let two_d_distances: Vec<f64> = (0..degrees_freedom)
+    let mutual_information: Vec<f64> = (0..degrees_freedom)
         .into_par_iter()
         .try_fold(Vec::new, |mut acc, i| {
             for j in (i + 1)..degrees_freedom {
-                acc.push(calc_two_d_nn(&one_d_data[i], &one_d_data[j])?);
+                let joint_entropy = estimate_entropy_efficient(
+                    calc_two_d_nn(&one_d_data[i], &one_d_data[j])? * 2.0,
+                    (n_frames as f64).recip(),
+                    two_d_constant,
+                );
+                acc.push(one_d_entropies[i] + one_d_entropies[j] - joint_entropy);
             }
             Ok::<Vec<f64>, String>(acc)
         })
@@ -278,15 +293,36 @@ pub fn estimate_coordinate_mutual_information_rust(
             Ok::<Vec<f64>, String>(a)
         })?;
 
-    assert_eq!(two_d_distances.len(), two_d_degrees_freedom); // Just to be safe
-    let two_d_entropies: Vec<f64> = two_d_distances
-        .iter()
-        // .map(|&distance| estimate_entropy(distance * 2.0, n_frames, two_d_constant, 1))
-        .map(|&distance| {
-            estimate_entropy_efficient(distance * 2.0, (n_frames as f64).recip(), two_d_constant)
-        })
-        .collect();
-    Ok(two_d_entropies)
+    assert_eq!(mutual_information.len(), two_d_degrees_freedom); // Just to be safe
+    Ok(mutual_information)
+}
+
+pub fn estimate_coordinate_mie_entropy_rust(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+) -> Result<Vec<f64>, String> {
+    validate_one_d_data(&one_d_data, frames_end)?;
+
+    let coordinate_entropies = estimate_coordinate_entropy_rust(one_d_data.clone(), frames_end)?;
+    let degrees_freedom = coordinate_entropies.len();
+    if degrees_freedom == 1 {
+        return Ok(coordinate_entropies);
+    }
+
+    let pairwise_mutual_information =
+        estimate_coordinate_mutual_information_rust(one_d_data, frames_end)?;
+    let mut coordinate_mie_entropy = coordinate_entropies;
+    let mut pair_idx = 0;
+    for i in 0..degrees_freedom {
+        for j in (i + 1)..degrees_freedom {
+            let half_pair_mi = 0.5 * pairwise_mutual_information[pair_idx];
+            coordinate_mie_entropy[i] -= half_pair_mi;
+            coordinate_mie_entropy[j] -= half_pair_mi;
+            pair_idx += 1;
+        }
+    }
+
+    Ok(coordinate_mie_entropy)
 }
 
 pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {

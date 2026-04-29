@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{calculate_entropy_from_data, calculate_entropy_from_data_with_order};
+use nn_entropy::{
+    calculate_entropy_from_data, calculate_entropy_from_data_with_order,
+    estimate_coordinate_entropy_rust,
+};
 
 fn test_data_path(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -42,6 +45,57 @@ fn first_order_entropy_matches_external_reference_for_test_fixture() {
         diff < 1e-9,
         "first-order entropy mismatch: got {entropy}, expected {expected}, diff {diff}"
     );
+}
+
+#[test]
+fn coordinate_first_order_entropy_matches_external_reference_for_test_fixture() {
+    let (one_d_data, frame_count) = one_d_data_from_fixture(false);
+    let entropies = estimate_coordinate_entropy_rust(one_d_data, frame_count)
+        .expect("coordinate entropy calculation failed");
+    let expected = [
+        -2.191987290884043,
+        -2.0487846062513055,
+        -3.1696799251072125,
+        -2.2133854743950314,
+        -1.393460671737234,
+        -1.6466926810259102,
+        -1.473717514192777,
+        -2.2824391744103885,
+        -0.8068605030087515,
+        -1.9017447390017441,
+        -1.566875588217191,
+        -1.7170077099354897,
+        -1.0767286727727439,
+        -2.212324981754663,
+        -2.3159339787698814,
+        -1.4020467659639122,
+        -2.0492610475080566,
+        -1.8253234616647278,
+        -1.003624819729084,
+        -0.40948034657778365,
+        -0.7080474758829705,
+        -2.1680865643109426,
+        -0.5438524953779607,
+        0.4640503371504199,
+        -0.4886070200656061,
+        -0.7936194264908667,
+        -1.0945962573885026,
+        -0.37336191468224866,
+        -0.6295941217736685,
+    ];
+
+    assert_eq!(
+        entropies.len(),
+        expected.len(),
+        "coordinate entropy length mismatch"
+    );
+    for (idx, (actual, expected)) in entropies.iter().zip(expected.iter()).enumerate() {
+        let diff = (actual - expected).abs();
+        assert!(
+            diff < 1e-9,
+            "coordinate {idx} entropy mismatch: got {actual}, expected {expected}, diff {diff}"
+        );
+    }
 }
 
 #[test]

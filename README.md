@@ -50,6 +50,7 @@ Other helpers:
 - `calculate_entropy_from_data_with_order` for explicit MIE order 1, 2, 3, or 4.
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
+- `estimate_coordinate_mie_entropy_rust` for per-coordinate second-order MIE entropy contributions. Each pairwise mutual information term is split evenly between the two coordinates, so the returned values sum to the order-2 total entropy.
 
 ## Python bindings
 
@@ -57,7 +58,11 @@ The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) wi
 - `estimate_mie_entropy(data, mie_order=None)`
 - `estimate_coordinate_entropy(data)`
 - `estimate_coordinate_mutual_information(data)`
+- `estimate_coordinate_mie_entropy(data)`
 - `estimate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None, mie_order=None)`
+- `estimate_coordinate_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
+- `estimate_coordinate_mutual_information_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
+- `estimate_coordinate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
 
 A typical build workflow uses `maturin`:
 
