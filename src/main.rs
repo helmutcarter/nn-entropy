@@ -1,14 +1,15 @@
 use std::env;
 use std::path::Path;
 
+use nn_entropy::JointNearestBackend;
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::calculate_entropy_from_data_with_order;
+use nn_entropy::calculate_entropy_from_data_with_order_and_backend;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4] [--nn-backend kdtree|dual-tree]",
             args[0]
         );
         std::process::exit(1);
@@ -21,6 +22,7 @@ fn main() {
     let mut stop: Option<usize> = None;
     let mut use_python = false;
     let mut mie_order = 2;
+    let mut nn_backend = JointNearestBackend::KdTree;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
@@ -52,6 +54,17 @@ fn main() {
                 mie_order = args[i + 1]
                     .parse::<usize>()
                     .expect("invalid --mie-order value");
+                i += 2;
+            }
+            "--nn-backend" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--nn-backend requires a value");
+                    std::process::exit(1);
+                }
+                nn_backend = JointNearestBackend::parse(&args[i + 1]).unwrap_or_else(|| {
+                    eprintln!("--nn-backend must be kdtree or dual-tree");
+                    std::process::exit(1);
+                });
                 i += 2;
             }
             "--python" => {
@@ -135,7 +148,12 @@ fn main() {
     }
 
     let used_frames = one_d_data[0].len();
-    let entropy = match calculate_entropy_from_data_with_order(one_d_data, used_frames, mie_order) {
+    let entropy = match calculate_entropy_from_data_with_order_and_backend(
+        one_d_data,
+        used_frames,
+        mie_order,
+        nn_backend,
+    ) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("Entropy calculation failed: {err}");

@@ -23,7 +23,7 @@ cargo build --release
 ## CLI usage
 
 ```bash
-cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4]
+cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4] [--nn-backend kdtree|dual-tree]
 ```
 
 Example:
@@ -36,6 +36,7 @@ Notes:
 - `--stop` limits the number of frames read to N.
 - `--start` skips the first N frames
 - `--mie-order` selects the expansion order. The default is 2, matching previous behavior.
+- `--nn-backend` selects the exact nearest-neighbor backend. The default is `kdtree`; `dual-tree` is experimental.
 
 ## Rust library usage
 
@@ -48,16 +49,17 @@ let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
 
 Other helpers:
 - `calculate_entropy_from_data_with_order` for explicit MIE order 1, 2, 3, or 4.
+- `calculate_entropy_from_data_with_order_and_backend` for selecting the exact nearest-neighbor backend.
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
 
 ## Python bindings
 
 The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) with:
-- `estimate_mie_entropy(data, mie_order=None)`
+- `estimate_mie_entropy(data, mie_order=None, nn_backend=None)`
 - `estimate_coordinate_entropy(data)`
 - `estimate_coordinate_mutual_information(data)`
-- `estimate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None, mie_order=None)`
+- `estimate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None, mie_order=None, nn_backend=None)`
 
 A typical build workflow uses `maturin`:
 

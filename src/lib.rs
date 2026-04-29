@@ -7,7 +7,10 @@ use std::io::ErrorKind;
 use std::num::NonZero;
 
 pub mod bat_library;
+pub mod joint_nn;
 pub mod pyo3_api;
+
+pub use joint_nn::JointNearestBackend;
 
 fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(), String> {
     if one_d_data.is_empty() {
@@ -80,6 +83,20 @@ pub fn calculate_entropy_from_data_with_order(
     frames_end: usize,
     mie_order: usize,
 ) -> Result<f64, String> {
+    calculate_entropy_from_data_with_order_and_backend(
+        one_d_data,
+        frames_end,
+        mie_order,
+        JointNearestBackend::KdTree,
+    )
+}
+
+pub fn calculate_entropy_from_data_with_order_and_backend(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    mie_order: usize,
+    backend: JointNearestBackend,
+) -> Result<f64, String> {
     if !(1..=4).contains(&mie_order) {
         return Err(format!(
             "unsupported MIE order {mie_order}; supported orders are 1, 2, 3, and 4"
@@ -126,7 +143,9 @@ pub fn calculate_entropy_from_data_with_order(
             || 0.0,
             |acc, rank| {
                 let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
-                Ok::<f64, String>(acc + calc_two_d_nn(&one_d_data[i], &one_d_data[j])?)
+                Ok::<f64, String>(
+                    acc + calc_two_d_nn_with_backend(&one_d_data[i], &one_d_data[j], backend)?,
+                )
             },
         )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
@@ -148,7 +167,12 @@ pub fn calculate_entropy_from_data_with_order(
             |acc, rank| {
                 let [i, j, k] = combination_from_rank::<3>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_three_d_nn(&one_d_data[i], &one_d_data[j], &one_d_data[k])?,
+                    acc + calc_three_d_nn_with_backend(
+                        &one_d_data[i],
+                        &one_d_data[j],
+                        &one_d_data[k],
+                        backend,
+                    )?,
                 )
             },
         )
@@ -178,11 +202,12 @@ pub fn calculate_entropy_from_data_with_order(
             |acc, rank| {
                 let [i, j, k, l] = combination_from_rank::<4>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_four_d_nn(
+                    acc + calc_four_d_nn_with_backend(
                         &one_d_data[i],
                         &one_d_data[j],
                         &one_d_data[k],
                         &one_d_data[l],
+                        backend,
                     )?,
                 )
             },
@@ -291,8 +316,8 @@ pub fn estimate_coordinate_mutual_information_rust(
 
 pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
     let mut unique_points = points.to_vec();
-    unique_points.dedup();
     unique_points.sort_by(|a, b| a.total_cmp(b));
+    unique_points.dedup();
     let total_unique_points = unique_points.len();
     if total_unique_points < 2 {
         return Err("coordinate series must contain at least two unique values".to_string());
@@ -357,7 +382,15 @@ pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
 }
 
 pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, String> {
-    calc_joint_nn([points_1.as_slice(), points_2.as_slice()])
+    calc_two_d_nn_with_backend(points_1, points_2, JointNearestBackend::KdTree)
+}
+
+pub fn calc_two_d_nn_with_backend(
+    points_1: &Vec<f64>,
+    points_2: &Vec<f64>,
+    backend: JointNearestBackend,
+) -> Result<f64, String> {
+    joint_nn::calc_joint_nn([points_1.as_slice(), points_2.as_slice()], backend)
 }
 
 pub fn calc_three_d_nn(
@@ -365,11 +398,23 @@ pub fn calc_three_d_nn(
     points_2: &Vec<f64>,
     points_3: &Vec<f64>,
 ) -> Result<f64, String> {
-    calc_joint_nn([
-        points_1.as_slice(),
-        points_2.as_slice(),
-        points_3.as_slice(),
-    ])
+    calc_three_d_nn_with_backend(points_1, points_2, points_3, JointNearestBackend::KdTree)
+}
+
+pub fn calc_three_d_nn_with_backend(
+    points_1: &Vec<f64>,
+    points_2: &Vec<f64>,
+    points_3: &Vec<f64>,
+    backend: JointNearestBackend,
+) -> Result<f64, String> {
+    joint_nn::calc_joint_nn(
+        [
+            points_1.as_slice(),
+            points_2.as_slice(),
+            points_3.as_slice(),
+        ],
+        backend,
+    )
 }
 
 pub fn calc_four_d_nn(
@@ -378,56 +423,33 @@ pub fn calc_four_d_nn(
     points_3: &Vec<f64>,
     points_4: &Vec<f64>,
 ) -> Result<f64, String> {
-    calc_joint_nn([
-        points_1.as_slice(),
-        points_2.as_slice(),
-        points_3.as_slice(),
-        points_4.as_slice(),
-    ])
+    calc_four_d_nn_with_backend(
+        points_1,
+        points_2,
+        points_3,
+        points_4,
+        JointNearestBackend::KdTree,
+    )
 }
 
-fn calc_joint_nn<const K: usize>(coordinates: [&[f64]; K]) -> Result<f64, String> {
-    let points_len = coordinates[0].len();
-    if points_len < 2 {
-        return Err(format!(
-            "need at least two points for {K}D nearest neighbor"
-        ));
-    }
-    if coordinates
-        .iter()
-        .any(|coordinate| coordinate.len() != points_len)
-    {
-        return Err(format!(
-            "all coordinate series must have equal length for {K}D nearest neighbor"
-        ));
-    }
-
-    let mut points: Vec<[f64; K]> = Vec::with_capacity(points_len);
-    for frame_idx in 0..points_len {
-        let mut point = [0.0; K];
-        for dimension_idx in 0..K {
-            point[dimension_idx] = coordinates[dimension_idx][frame_idx];
-        }
-        points.push(point);
-    }
-
-    let kdtree: ImmutableKdTree<f64, K> = ImmutableKdTree::new_from_slice(&points);
-    let mut distance_total: f64 = 0.0;
-    for point in points {
-        let neighbor_count = if points_len < 8 { points_len } else { 8 };
-        let result = kdtree
-            .nearest_n::<SquaredEuclidean>(&point, NonZero::new(neighbor_count).unwrap())
-            .into_iter()
-            .skip(1)
-            .map(|neighbor| neighbor.distance)
-            .find(|distance| *distance > 0.0)
-            .ok_or_else(|| {
-                format!("need at least two distinct points for {K}D nearest neighbor")
-            })?;
-        distance_total += result.sqrt().ln();
-    }
-    Ok(distance_total)
+pub fn calc_four_d_nn_with_backend(
+    points_1: &Vec<f64>,
+    points_2: &Vec<f64>,
+    points_3: &Vec<f64>,
+    points_4: &Vec<f64>,
+    backend: JointNearestBackend,
+) -> Result<f64, String> {
+    joint_nn::calc_joint_nn(
+        [
+            points_1.as_slice(),
+            points_2.as_slice(),
+            points_3.as_slice(),
+            points_4.as_slice(),
+        ],
+        backend,
+    )
 }
+
 // Helper function to generate Gaussian data for testing
 pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     let normal = Normal::new(mean, std_dev).unwrap();

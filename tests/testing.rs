@@ -27,6 +27,15 @@ fn test_one_d_nn_real_data_with_repeats() {
 }
 
 #[test]
+fn test_one_d_nn_non_adjacent_repeats_are_deduplicated() {
+    let coord: Vec<f64> = vec![1.0, 2.0, 1.0, 3.0];
+    let ln_distance = calc_one_d_nn(&coord).expect("calc_one_d_nn failed");
+
+    assert!(ln_distance.is_finite(), "expected finite entropy distance");
+    assert_approx_eq!(ln_distance, 0.0);
+}
+
+#[test]
 fn test_one_d_nn_constant_series_is_invalid() {
     let coord: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0];
     let err = calc_one_d_nn(&coord).expect_err("expected error for constant series");
@@ -49,6 +58,97 @@ fn test_two_d_nn_real_data() {
 }
 
 #[test]
+fn test_dual_tree_backend_matches_kdtree_for_two_d() {
+    let coord_1 = vec![0.2, 1.1, 0.7, 2.4, 3.0, 1.8, 2.2, 0.4];
+    let coord_2 = vec![1.3, 0.5, 2.1, 1.7, 0.9, 2.8, 3.3, 0.2];
+
+    let kdtree =
+        calc_two_d_nn_with_backend(&coord_1, &coord_2, JointNearestBackend::KdTree).unwrap();
+    let dual_tree =
+        calc_two_d_nn_with_backend(&coord_1, &coord_2, JointNearestBackend::DualTree).unwrap();
+
+    assert_approx_eq!(dual_tree, kdtree);
+}
+
+#[test]
+fn test_dual_tree_backend_matches_kdtree_for_three_d() {
+    let coord_1 = vec![0.2, 1.1, 0.7, 2.4, 3.0, 1.8, 2.2, 0.4];
+    let coord_2 = vec![1.3, 0.5, 2.1, 1.7, 0.9, 2.8, 3.3, 0.2];
+    let coord_3 = vec![2.9, 2.1, 0.4, 3.6, 1.2, 0.8, 2.4, 1.6];
+
+    let kdtree =
+        calc_three_d_nn_with_backend(&coord_1, &coord_2, &coord_3, JointNearestBackend::KdTree)
+            .unwrap();
+    let dual_tree =
+        calc_three_d_nn_with_backend(&coord_1, &coord_2, &coord_3, JointNearestBackend::DualTree)
+            .unwrap();
+
+    assert_approx_eq!(dual_tree, kdtree);
+}
+
+#[test]
+fn test_dual_tree_backend_matches_kdtree_for_four_d() {
+    let coord_1 = vec![0.2, 1.1, 0.7, 2.4, 3.0, 1.8, 2.2, 0.4];
+    let coord_2 = vec![1.3, 0.5, 2.1, 1.7, 0.9, 2.8, 3.3, 0.2];
+    let coord_3 = vec![2.9, 2.1, 0.4, 3.6, 1.2, 0.8, 2.4, 1.6];
+    let coord_4 = vec![1.7, 3.1, 2.5, 0.6, 3.4, 2.2, 0.1, 1.4];
+
+    let kdtree = calc_four_d_nn_with_backend(
+        &coord_1,
+        &coord_2,
+        &coord_3,
+        &coord_4,
+        JointNearestBackend::KdTree,
+    )
+    .unwrap();
+    let dual_tree = calc_four_d_nn_with_backend(
+        &coord_1,
+        &coord_2,
+        &coord_3,
+        &coord_4,
+        JointNearestBackend::DualTree,
+    )
+    .unwrap();
+
+    assert_approx_eq!(dual_tree, kdtree);
+}
+
+#[test]
+fn test_dual_tree_backend_matches_kdtree_with_duplicate_frames() {
+    let coord_1 = vec![0.2, 0.2, 1.0, 2.0, 2.5, 3.0];
+    let coord_2 = vec![1.1, 1.1, 1.5, 2.4, 2.8, 3.2];
+
+    let kdtree =
+        calc_two_d_nn_with_backend(&coord_1, &coord_2, JointNearestBackend::KdTree).unwrap();
+    let dual_tree =
+        calc_two_d_nn_with_backend(&coord_1, &coord_2, JointNearestBackend::DualTree).unwrap();
+
+    assert_approx_eq!(dual_tree, kdtree);
+}
+
+#[test]
+fn test_dual_tree_backend_matches_kdtree_after_recursive_splits() {
+    let coord_1 = (0..48)
+        .map(|i| ((i * 17 % 41) as f64) * 0.13 + (i as f64).sin() * 0.01)
+        .collect::<Vec<_>>();
+    let coord_2 = (0..48)
+        .map(|i| ((i * 11 % 37) as f64) * 0.17 + (i as f64).cos() * 0.01)
+        .collect::<Vec<_>>();
+    let coord_3 = (0..48)
+        .map(|i| ((i * 7 % 43) as f64) * 0.19 + ((i * i) as f64).sin() * 0.01)
+        .collect::<Vec<_>>();
+
+    let kdtree =
+        calc_three_d_nn_with_backend(&coord_1, &coord_2, &coord_3, JointNearestBackend::KdTree)
+            .unwrap();
+    let dual_tree =
+        calc_three_d_nn_with_backend(&coord_1, &coord_2, &coord_3, JointNearestBackend::DualTree)
+            .unwrap();
+
+    assert_approx_eq!(dual_tree, kdtree);
+}
+
+#[test]
 fn test_calculate_entropy_order_two_matches_default() {
     let data = vec![
         vec![0.1, 0.4, 0.8, 1.1, 1.7],
@@ -61,6 +161,41 @@ fn test_calculate_entropy_order_two_matches_default() {
         calculate_entropy_from_data_with_order(data, 5, 2).expect("order-2 entropy failed");
 
     assert_approx_eq!(default_entropy, order_two_entropy);
+}
+
+#[test]
+fn test_calculate_entropy_dual_tree_backend_matches_kdtree_backend() {
+    let data = vec![
+        (0..24)
+            .map(|i| ((i * 17 % 41) as f64) * 0.13 + (i as f64).sin() * 0.01)
+            .collect::<Vec<_>>(),
+        (0..24)
+            .map(|i| ((i * 11 % 37) as f64) * 0.17 + (i as f64).cos() * 0.01)
+            .collect::<Vec<_>>(),
+        (0..24)
+            .map(|i| ((i * 7 % 43) as f64) * 0.19 + ((i * i) as f64).sin() * 0.01)
+            .collect::<Vec<_>>(),
+        (0..24)
+            .map(|i| ((i * 5 % 31) as f64) * 0.23 + ((i + 3) as f64).cos() * 0.01)
+            .collect::<Vec<_>>(),
+    ];
+
+    let kdtree = calculate_entropy_from_data_with_order_and_backend(
+        data.clone(),
+        24,
+        3,
+        JointNearestBackend::KdTree,
+    )
+    .expect("kdtree entropy failed");
+    let dual_tree = calculate_entropy_from_data_with_order_and_backend(
+        data,
+        24,
+        3,
+        JointNearestBackend::DualTree,
+    )
+    .expect("dual-tree entropy failed");
+
+    assert_approx_eq!(dual_tree, kdtree);
 }
 
 #[test]

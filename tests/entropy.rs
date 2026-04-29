@@ -31,7 +31,7 @@ fn entropy_matches_reference_for_test_fixture() {
 
     let entropy =
         calculate_entropy_from_data(one_d_data, frame_count).expect("entropy calculation failed");
-    let expected = -44.640002919813014_f64;
+    let expected = 1023.7674607981526_f64;
     let diff = (entropy - expected).abs();
     assert!(
         diff < 1e-9,
