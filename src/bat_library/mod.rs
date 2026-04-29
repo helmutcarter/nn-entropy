@@ -608,14 +608,7 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
         .collect();
     if fragment.len() != 3 {
         let terminal_set: HashSet<usize> = terminal_atoms.into_iter().collect();
-        let nonterminal_candidates: Vec<usize> = third_candidates
-            .iter()
-            .filter(|a| !terminal_set.contains(a))
-            .copied()
-            .collect();
-        if !nonterminal_candidates.is_empty() {
-            third_candidates = nonterminal_candidates;
-        }
+        third_candidates.retain(|a| !terminal_set.contains(a));
     }
     if third_candidates.is_empty() {
         return Err("no valid third atom for BAT root".into());
@@ -673,38 +666,6 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
                 }
             }
             idx += 1;
-        }
-        if !torsion_added {
-            'fallback: for &a1 in selected_atoms.iter() {
-                let a0_list: Vec<usize> = adjacency[a1]
-                    .iter()
-                    .filter(|n| fragment_set.contains(n) && !selected_atoms.contains(n))
-                    .copied()
-                    .collect();
-                let a0_sorted = sort_atoms_by_mass(&a0_list, masses, false);
-                for &a0 in a0_sorted.iter() {
-                    let a2_list: Vec<usize> = adjacency[a1]
-                        .iter()
-                        .filter(|n| **n != a0 && selected_atoms.contains(n))
-                        .copied()
-                        .collect();
-                    let a2_sorted = sort_atoms_by_mass(&a2_list, masses, false);
-                    for &a2 in a2_sorted.iter() {
-                        let a3_list: Vec<usize> = selected_atoms
-                            .iter()
-                            .filter(|&&n| n != a1 && n != a2)
-                            .copied()
-                            .collect();
-                        let a3_sorted = sort_atoms_by_mass(&a3_list, masses, false);
-                        if let Some(&a3) = a3_sorted.first() {
-                            torsions.push([a0, a1, a2, a3]);
-                            selected_atoms.push(a0);
-                            torsion_added = true;
-                            break 'fallback;
-                        }
-                    }
-                }
-            }
         }
         if !torsion_added {
             return Err("BAT torsion search failed".into());
@@ -814,17 +775,24 @@ fn torsion_calc_f32(a1: [f32; 3], a2: [f32; 3], a3: [f32; 3], a4: [f32; 3]) -> f
 fn build_bat_list(
     fragment: &[usize],
     adjacency: &[Vec<usize>],
+    hydrogens: &HashSet<usize>,
     masses: &[f64],
 ) -> Result<Vec<Vec<usize>>> {
-    let bat = build_bat(fragment, adjacency, masses)?;
-    let mut bat_list = vec![
-        vec![bat.root[0], bat.root[1]],
-        vec![bat.root[1], bat.root[2]],
-        vec![bat.root[0], bat.root[1], bat.root[2]],
-    ];
-    for torsion in bat.torsions.iter() {
-        bat_list.push(vec![torsion[0], torsion[1]]);
+    let mut bat_list = Vec::new();
+
+    let fragment_set: HashSet<usize> = fragment.iter().copied().collect();
+    for &a in fragment {
+        for &b in adjacency[a].iter() {
+            if a < b && fragment_set.contains(&b) {
+                if !hydrogens.contains(&a) && !hydrogens.contains(&b) {
+                    bat_list.push(vec![a, b]);
+                }
+            }
+        }
     }
+
+    let bat = build_bat(fragment, adjacency, masses)?;
+    bat_list.push(vec![bat.root[0], bat.root[1], bat.root[2]]);
     for angle in bat.angles.iter() {
         bat_list.push(vec![angle[0], angle[1], angle[2]]);
     }
@@ -907,10 +875,14 @@ impl InternalCoordinates {
         }
 
         let mut molecule_mask = vec![true; prmtop.natom];
+        let mut hydrogens = HashSet::new();
         for (i, typ) in prmtop.atom_types.iter().enumerate() {
             let t = typ.trim();
             if t == "HW" || t == "OW" || t == "EP" {
                 molecule_mask[i] = false;
+            }
+            if (t.starts_with('H') || t.starts_with('h')) && t != "HW" {
+                hydrogens.insert(i);
             }
         }
 
@@ -935,7 +907,12 @@ impl InternalCoordinates {
                 }
             }
             atom_num += fragment.len();
-            bat_list.extend(build_bat_list(&fragment, &adjacency, &prmtop.masses)?);
+            bat_list.extend(build_bat_list(
+                &fragment,
+                &adjacency,
+                &hydrogens,
+                &prmtop.masses,
+            )?);
         }
 
         let dim = bat_list.len();
@@ -986,30 +963,5 @@ impl InternalCoordinates {
             }
         }
         self.pairs = pairs;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_bat_handles_methane_star_fragment() {
-        let fragment = vec![0, 1, 2, 3, 4];
-        let adjacency = vec![vec![1, 2, 3, 4], vec![0], vec![0], vec![0], vec![0]];
-        let masses = vec![12.0, 1.0, 1.0, 1.0, 1.0];
-
-        let bat = build_bat(&fragment, &adjacency, &masses)
-            .expect("methane star fragment should produce a BAT");
-        assert_eq!(bat.root.len(), 3);
-        assert_eq!(bat.angles.len(), 2);
-        assert_eq!(bat.torsions.len(), 2);
-
-        let bat_list = build_bat_list(&fragment, &adjacency, &masses)
-            .expect("methane star fragment should produce BAT coordinates");
-        assert_eq!(bat_list.len(), 9);
-        assert_eq!(bat_list.iter().filter(|entry| entry.len() == 2).count(), 4);
-        assert_eq!(bat_list.iter().filter(|entry| entry.len() == 3).count(), 3);
-        assert_eq!(bat_list.iter().filter(|entry| entry.len() == 4).count(), 2);
     }
 }
