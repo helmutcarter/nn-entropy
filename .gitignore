@@ -3,3 +3,5 @@
 *.csv
 *.txt
 *.code-workspace
+/reference
+/tmp
