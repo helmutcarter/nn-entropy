@@ -6,6 +6,7 @@ use crate::estimate_coordinate_mie_entropy_rust;
 use crate::estimate_coordinate_mutual_information_rust;
 use numpy::PyReadonlyArray2;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use std::path::Path;
 
 fn to_py_err<E: std::fmt::Display>(err: E) -> PyErr {
@@ -68,6 +69,84 @@ fn one_d_data_from_files(
 
     let used_frames = one_d_data[0].len();
     Ok((one_d_data, used_frames))
+}
+
+fn one_d_data_from_py(data: &Bound<'_, PyAny>) -> PyResult<(Vec<Vec<f64>>, usize)> {
+    if let Ok(system) = data.extract::<PyRef<'_, System>>() {
+        return Ok((system.one_d_data.clone(), system.frames));
+    }
+
+    let array = data.extract::<PyReadonlyArray2<f64>>()?;
+    Ok(array_to_one_d_data(array))
+}
+
+#[pyclass]
+struct System {
+    one_d_data: Vec<Vec<f64>>,
+    frames: usize,
+}
+
+#[pymethods]
+impl System {
+    #[getter]
+    fn frames(&self) -> usize {
+        self.frames
+    }
+
+    #[getter]
+    fn coordinates(&self) -> usize {
+        self.one_d_data.len()
+    }
+
+    #[getter]
+    fn data(&self) -> Vec<Vec<f64>> {
+        self.one_d_data.clone()
+    }
+
+    #[pyo3(signature = (mie_order=None))]
+    fn estimate_entropy(&self, mie_order: Option<usize>) -> PyResult<f64> {
+        calculate_entropy_from_data_with_order(
+            self.one_d_data.clone(),
+            self.frames,
+            mie_order.unwrap_or(2),
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    fn estimate_coordinate_entropy(&self) -> PyResult<Vec<f64>> {
+        estimate_coordinate_entropy_rust(self.one_d_data.clone(), self.frames)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    fn estimate_coordinate_mutual_information(&self) -> PyResult<Vec<f64>> {
+        estimate_coordinate_mutual_information_rust(self.one_d_data.clone(), self.frames)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    fn estimate_coordinate_mie_entropy(&self) -> PyResult<Vec<f64>> {
+        estimate_coordinate_mie_entropy_rust(self.one_d_data.clone(), self.frames)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+}
+
+#[pyfunction(signature = (top_path, traj_path, start=None, stop=None, torsions_only=None))]
+fn load_system(
+    top_path: &str,
+    traj_path: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+    torsions_only: Option<bool>,
+) -> PyResult<System> {
+    let (one_d_data, frames) =
+        one_d_data_from_files(top_path, traj_path, start, stop, torsions_only)?;
+    Ok(System { one_d_data, frames })
+}
+
+#[pyfunction(signature = (data, mie_order=None))]
+fn estimate_entropy(data: &Bound<'_, PyAny>, mie_order: Option<usize>) -> PyResult<f64> {
+    let (one_d_data, frames_end) = one_d_data_from_py(data)?;
+    calculate_entropy_from_data_with_order(one_d_data, frames_end, mie_order.unwrap_or(2))
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Python wrapper around the main entropy function
@@ -162,6 +241,9 @@ fn estimate_coordinate_mie_entropy_from_files(
 
 #[pymodule]
 fn nn_entropy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<System>()?;
+    m.add_function(wrap_pyfunction!(load_system, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_mie_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_coordinate_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_coordinate_mutual_information, m)?)?;

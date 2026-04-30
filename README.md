@@ -55,6 +55,8 @@ Other helpers:
 ## Python bindings
 
 The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) with:
+- `load_system(top_path, traj_path, start=None, stop=None, torsions_only=None)`
+- `estimate_entropy(data_or_system, mie_order=None)`
 - `estimate_mie_entropy(data, mie_order=None)`
 - `estimate_coordinate_entropy(data)`
 - `estimate_coordinate_mutual_information(data)`
@@ -63,6 +65,18 @@ The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) wi
 - `estimate_coordinate_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
 - `estimate_coordinate_mutual_information_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
 - `estimate_coordinate_mie_entropy_from_files(top_path, traj_path, start=None, stop=None, torsions_only=None)`
+
+Preferred usage:
+
+```python
+import nn_entropy
+
+system = nn_entropy.load_system("system.parm7", "trajectory.nc")
+entropy = nn_entropy.estimate_entropy(system, mie_order=2)
+
+coordinate_entropy = system.estimate_coordinate_entropy()
+coordinate_mie_entropy = system.estimate_coordinate_mie_entropy()
+```
 
 A typical build workflow uses `maturin`:
 
