@@ -84,6 +84,10 @@ A typical build workflow uses `maturin`:
 maturin develop --release
 ```
 
+Threading note:
+- The Python wrappers release the GIL while loading trajectories and running entropy calculations, so multiple Python threads can call into `nn_entropy` concurrently.
+- Internal parallelism is handled in Rust with Rayon. Set `RAYON_NUM_THREADS=N` if you want to cap or tune the Rust worker pool.
+
 ## Tests
 
 ```bash
