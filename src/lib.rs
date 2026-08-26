@@ -355,11 +355,17 @@ pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
             )
             .ln();
         } else {
-            distance_total += f64::min(
-                distance(*point, unique_points[index - 1]),
-                distance(*point, unique_points[index + 1]),
-            )
-            .ln();
+            let mut current_distance = 0.0;
+            let mut offset = 1;
+            while current_distance == 0.0 {
+                // This should handle special case where there >=3 duplicates of a single coordinate value
+                current_distance = f64::min(
+                    distance(*point, unique_points[index - offset]),
+                    distance(*point, unique_points[index + offset]),
+                );
+                offset += 1;
+            }
+            distance_total += current_distance.ln();
         }
     }
     Ok(distance_total)
