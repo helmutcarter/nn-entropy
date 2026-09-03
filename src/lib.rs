@@ -9,6 +9,33 @@ use std::num::NonZero;
 pub mod bat_library;
 pub mod pyo3_api;
 
+/// Metric used for one internal-coordinate dimension.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CoordinateMetric {
+    Linear,
+    Periodic { period: f64 },
+}
+
+impl CoordinateMetric {
+    fn validate(self, index: usize) -> Result<(), String> {
+        if let Self::Periodic { period } = self
+            && (!period.is_finite() || period <= 0.0)
+        {
+            return Err(format!(
+                "period for coordinate {index} must be finite and positive"
+            ));
+        }
+        Ok(())
+    }
+
+    fn canonicalize(self, value: f64) -> f64 {
+        match self {
+            Self::Linear => value,
+            Self::Periodic { period } => value.rem_euclid(period),
+        }
+    }
+}
+
 fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(), String> {
     if one_d_data.is_empty() {
         return Err("no coordinate data provided".to_string());
@@ -39,6 +66,38 @@ fn validate_one_d_data(one_d_data: &[Vec<f64>], frames_end: usize) -> Result<(),
     Ok(())
 }
 
+fn validate_metrics(metrics: &[CoordinateMetric], dimensions: usize) -> Result<(), String> {
+    if metrics.len() != dimensions {
+        return Err(format!(
+            "received {} coordinate metrics for {dimensions} coordinates",
+            metrics.len()
+        ));
+    }
+    for (index, metric) in metrics.iter().copied().enumerate() {
+        metric.validate(index)?;
+    }
+    Ok(())
+}
+
+fn entropy_constant(n_frames: usize, dimensions: usize) -> Result<f64, String> {
+    let log_unit_ball_volume = match dimensions {
+        1 => 2.0_f64.ln(),
+        2 => std::f64::consts::PI.ln(),
+        3 => (4.0 * std::f64::consts::PI / 3.0).ln(),
+        4 => (std::f64::consts::PI.powi(2) / 2.0).ln(),
+        _ => {
+            return Err(format!(
+                "unsupported nearest-neighbor dimension {dimensions}"
+            ));
+        }
+    };
+    // Deliberately match the historical Python implementation. The exact
+    // finite-sample term is psi(N) - psi(1) = H_(N-1); ln(N) + gamma is its
+    // large-N approximation.
+    const EULER_MASCHERONI: f64 = 0.57721566490153;
+    Ok((n_frames as f64).ln() + EULER_MASCHERONI + log_unit_ball_volume)
+}
+
 fn binomial(n: usize, k: usize) -> usize {
     if k > n {
         return 0;
@@ -53,12 +112,12 @@ fn combination_from_rank<const K: usize>(mut rank: usize, n: usize) -> [usize; K
 
     let mut combination = [0usize; K];
     let mut start = 0;
-    for position in 0..K {
+    for (position, slot) in combination.iter_mut().enumerate() {
         for candidate in start..n {
             let remaining = K - position - 1;
             let combinations_with_candidate = binomial(n - candidate - 1, remaining);
             if rank < combinations_with_candidate {
-                combination[position] = candidate;
+                *slot = candidate;
                 start = candidate + 1;
                 break;
             }
@@ -80,12 +139,23 @@ pub fn calculate_entropy_from_data_with_order(
     frames_end: usize,
     mie_order: usize,
 ) -> Result<f64, String> {
+    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
+    calculate_entropy_from_data_with_metrics(one_d_data, frames_end, mie_order, &metrics)
+}
+
+pub fn calculate_entropy_from_data_with_metrics(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    mie_order: usize,
+    metrics: &[CoordinateMetric],
+) -> Result<f64, String> {
     if !(1..=4).contains(&mie_order) {
         return Err(format!(
             "unsupported MIE order {mie_order}; supported orders are 1, 2, 3, and 4"
         ));
     }
     validate_one_d_data(&one_d_data, frames_end)?;
+    validate_metrics(metrics, one_d_data.len())?;
 
     let one_d_data = one_d_data
         .into_iter()
@@ -94,24 +164,25 @@ pub fn calculate_entropy_from_data_with_order(
 
     let n_frames = one_d_data[0].len();
     let degrees_freedom = one_d_data.len();
-
-    const EULER: f64 = 0.57721566490153;
-    let one_d_constant = ((n_frames as f64) * 2.0).ln() + EULER;
-    let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
-    let three_d_constant = ((n_frames as f64) * 4.0 * std::f64::consts::PI / 3.0).ln() + EULER;
-    let four_d_constant = ((n_frames as f64) * std::f64::consts::PI.powi(2) / 2.0).ln() + EULER;
+    let one_d_constant = entropy_constant(n_frames, 1)?;
+    let two_d_constant = entropy_constant(n_frames, 2)?;
+    let three_d_constant = entropy_constant(n_frames, 3)?;
+    let four_d_constant = entropy_constant(n_frames, 4)?;
 
     let one_d_distances_total: f64 = one_d_data
         .par_iter()
+        .zip(metrics.par_iter())
         .try_fold(
             || 0.0,
-            |acc, ic| Ok::<f64, String>(acc + calc_one_d_nn(ic)?),
+            |acc, (ic, metric)| Ok::<f64, String>(acc + calc_one_d_nn_with_metric(ic, *metric)?),
         )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
-    let one_d_entropy =
-        // estimate_entropy(one_d_distances_total, n_frames, one_d_constant, degrees_freedom);
-        estimate_entropy_efficient(one_d_distances_total, (n_frames as f64).recip(), one_d_constant*degrees_freedom as f64);
+    let one_d_entropy = estimate_entropy_efficient(
+        one_d_distances_total,
+        (n_frames as f64).recip(),
+        one_d_constant * degrees_freedom as f64,
+    );
 
     let effective_order = mie_order.min(degrees_freedom);
     if effective_order == 1 {
@@ -126,14 +197,22 @@ pub fn calculate_entropy_from_data_with_order(
             || 0.0,
             |acc, rank| {
                 let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
-                Ok::<f64, String>(acc + calc_two_d_nn(&one_d_data[i], &one_d_data[j])?)
+                Ok::<f64, String>(
+                    acc + calc_two_d_nn_with_metrics(
+                        &one_d_data[i],
+                        &one_d_data[j],
+                        [metrics[i], metrics[j]],
+                    )?,
+                )
             },
         )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
-    let two_d_entropy =
-    // estimate_entropy(two_d_distances_total * 2.0,n_frames,two_d_constant,two_d_degrees_freedom);
-    estimate_entropy_efficient(two_d_distances_total * 2.0,(n_frames as f64).recip(), two_d_constant*two_d_degrees_freedom as f64);
+    let two_d_entropy = estimate_entropy_efficient(
+        two_d_distances_total * 2.0,
+        (n_frames as f64).recip(),
+        two_d_constant * two_d_degrees_freedom as f64,
+    );
 
     if effective_order == 2 {
         return Ok(two_d_entropy - ((degrees_freedom - 2) as f64) * one_d_entropy);
@@ -148,7 +227,12 @@ pub fn calculate_entropy_from_data_with_order(
             |acc, rank| {
                 let [i, j, k] = combination_from_rank::<3>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_three_d_nn(&one_d_data[i], &one_d_data[j], &one_d_data[k])?,
+                    acc + calc_three_d_nn_with_metrics(
+                        &one_d_data[i],
+                        &one_d_data[j],
+                        &one_d_data[k],
+                        [metrics[i], metrics[j], metrics[k]],
+                    )?,
                 )
             },
         )
@@ -178,11 +262,12 @@ pub fn calculate_entropy_from_data_with_order(
             |acc, rank| {
                 let [i, j, k, l] = combination_from_rank::<4>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_four_d_nn(
+                    acc + calc_four_d_nn_with_metrics(
                         &one_d_data[i],
                         &one_d_data[j],
                         &one_d_data[k],
                         &one_d_data[l],
+                        [metrics[i], metrics[j], metrics[k], metrics[l]],
                     )?,
                 )
             },
@@ -210,7 +295,17 @@ pub fn estimate_coordinate_entropy_rust(
     one_d_data: Vec<Vec<f64>>,
     frames_end: usize,
 ) -> Result<Vec<f64>, String> {
+    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
+    estimate_coordinate_entropy_with_metrics(one_d_data, frames_end, &metrics)
+}
+
+pub fn estimate_coordinate_entropy_with_metrics(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+) -> Result<Vec<f64>, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
+    validate_metrics(metrics, one_d_data.len())?;
 
     let one_d_data = one_d_data
         .into_iter()
@@ -219,23 +314,16 @@ pub fn estimate_coordinate_entropy_rust(
 
     let n_frames: usize = one_d_data[0].len();
 
-    const EULER: f64 = 0.57721566490153;
-    let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
+    let one_d_constant = entropy_constant(n_frames, 1)?;
 
     let one_d_distances: Vec<f64> = one_d_data
         .par_iter()
-        .try_fold(Vec::new, |mut acc, ic| {
-            acc.push(calc_one_d_nn(ic)?);
-            Ok::<Vec<f64>, String>(acc)
-        })
-        .try_reduce(Vec::new, |mut a, mut b| {
-            a.append(&mut b);
-            Ok::<Vec<f64>, String>(a)
-        })?;
+        .zip(metrics.par_iter())
+        .map(|(ic, metric)| calc_one_d_nn_with_metric(ic, *metric))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let one_d_entropies: Vec<f64> = one_d_distances
         .iter()
-        // .map(|&distance| estimate_entropy(distance, n_frames, one_d_constant, 1))
         .map(|&distance| {
             estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
         })
@@ -248,7 +336,17 @@ pub fn estimate_coordinate_mutual_information_rust(
     one_d_data: Vec<Vec<f64>>,
     frames_end: usize,
 ) -> Result<Vec<f64>, String> {
+    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
+    estimate_coordinate_mutual_information_with_metrics(one_d_data, frames_end, &metrics)
+}
+
+pub fn estimate_coordinate_mutual_information_with_metrics(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+) -> Result<Vec<f64>, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
+    validate_metrics(metrics, one_d_data.len())?;
 
     let one_d_data = one_d_data
         .into_iter()
@@ -258,40 +356,37 @@ pub fn estimate_coordinate_mutual_information_rust(
     let n_frames: usize = one_d_data[0].len();
     let degrees_freedom: usize = one_d_data.len();
 
-    const EULER: f64 = 0.57721566490153;
-    let one_d_constant: f64 = ((n_frames as f64) * 2.0).ln() + EULER;
-    let two_d_constant: f64 = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+    let one_d_constant = entropy_constant(n_frames, 1)?;
+    let two_d_constant = entropy_constant(n_frames, 2)?;
 
     let one_d_entropies = one_d_data
         .par_iter()
-        .map(|ic| {
-            calc_one_d_nn(ic).map(|distance| {
+        .zip(metrics.par_iter())
+        .map(|(ic, metric)| {
+            calc_one_d_nn_with_metric(ic, *metric).map(|distance| {
                 estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let two_d_degrees_freedom = (0..degrees_freedom)
-        .flat_map(|i| (i + 1)..degrees_freedom)
-        .count();
+    let two_d_degrees_freedom = binomial(degrees_freedom, 2);
 
-    let mutual_information: Vec<f64> = (0..degrees_freedom)
+    let mutual_information: Vec<f64> = (0..two_d_degrees_freedom)
         .into_par_iter()
-        .try_fold(Vec::new, |mut acc, i| {
-            for j in (i + 1)..degrees_freedom {
-                let joint_entropy = estimate_entropy_efficient(
-                    calc_two_d_nn(&one_d_data[i], &one_d_data[j])? * 2.0,
-                    (n_frames as f64).recip(),
-                    two_d_constant,
-                );
-                acc.push(one_d_entropies[i] + one_d_entropies[j] - joint_entropy);
-            }
-            Ok::<Vec<f64>, String>(acc)
+        .map(|rank| {
+            let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
+            let joint_entropy = estimate_entropy_efficient(
+                calc_two_d_nn_with_metrics(
+                    &one_d_data[i],
+                    &one_d_data[j],
+                    [metrics[i], metrics[j]],
+                )? * 2.0,
+                (n_frames as f64).recip(),
+                two_d_constant,
+            );
+            Ok::<f64, String>(one_d_entropies[i] + one_d_entropies[j] - joint_entropy)
         })
-        .try_reduce(Vec::new, |mut a, mut b| {
-            a.append(&mut b);
-            Ok::<Vec<f64>, String>(a)
-        })?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     assert_eq!(mutual_information.len(), two_d_degrees_freedom); // Just to be safe
     Ok(mutual_information)
@@ -301,16 +396,27 @@ pub fn estimate_coordinate_mie_entropy_rust(
     one_d_data: Vec<Vec<f64>>,
     frames_end: usize,
 ) -> Result<Vec<f64>, String> {
-    validate_one_d_data(&one_d_data, frames_end)?;
+    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
+    estimate_coordinate_mie_entropy_with_metrics(one_d_data, frames_end, &metrics)
+}
 
-    let coordinate_entropies = estimate_coordinate_entropy_rust(one_d_data.clone(), frames_end)?;
+pub fn estimate_coordinate_mie_entropy_with_metrics(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+) -> Result<Vec<f64>, String> {
+    validate_one_d_data(&one_d_data, frames_end)?;
+    validate_metrics(metrics, one_d_data.len())?;
+
+    let coordinate_entropies =
+        estimate_coordinate_entropy_with_metrics(one_d_data.clone(), frames_end, metrics)?;
     let degrees_freedom = coordinate_entropies.len();
     if degrees_freedom == 1 {
         return Ok(coordinate_entropies);
     }
 
     let pairwise_mutual_information =
-        estimate_coordinate_mutual_information_rust(one_d_data, frames_end)?;
+        estimate_coordinate_mutual_information_with_metrics(one_d_data, frames_end, metrics)?;
     let mut coordinate_mie_entropy = coordinate_entropies;
     let mut pair_idx = 0;
     for i in 0..degrees_freedom {
@@ -326,109 +432,111 @@ pub fn estimate_coordinate_mie_entropy_rust(
 }
 
 pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
-    let mut unique_points = points.to_vec();
-    unique_points.dedup();
-    unique_points.sort_by(|a, b| a.total_cmp(b));
-    let total_unique_points = unique_points.len();
-    if total_unique_points < 2 {
-        return Err("coordinate series must contain at least two unique values".to_string());
-    }
-    // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
-    let mut distance_total: f64 = 0.0;
+    calc_one_d_nn_with_metric(points, CoordinateMetric::Linear)
+}
 
-    for point in points {
-        let index = unique_points
-            .binary_search_by(|probe| probe.total_cmp(point))
-            .map_err(|_| {
-                "coordinate value not found in unique list; input may contain NaN".to_string()
-            })?;
-        if index == 0 {
-            distance_total += f64::min(
-                distance(*point, unique_points[total_unique_points - 1]),
-                distance(*point, unique_points[index + 1]),
-            )
-            .ln();
-        } else if index == total_unique_points - 1 {
-            distance_total += f64::min(
-                distance(*point, unique_points[index - 1]),
-                distance(*point, unique_points[0]),
-            )
-            .ln();
-        } else {
-            let mut current_distance = 0.0;
-            let mut offset = 1;
-            while current_distance == 0.0 {
-                // This should handle special case where there >=3 duplicates of a single coordinate value
-                current_distance = f64::min(
-                    distance(*point, unique_points[index - offset]),
-                    distance(*point, unique_points[index + offset]),
-                );
-                offset += 1;
-            }
-            distance_total += current_distance.ln();
-        }
-    }
-    Ok(distance_total)
+pub fn calc_one_d_nn_with_metric(points: &[f64], metric: CoordinateMetric) -> Result<f64, String> {
+    calc_joint_nn_with_metrics([points], [metric])
 }
 
 pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
-    let mut unique_points = points.clone();
-    unique_points.sort_by(|a, b| a.total_cmp(b));
-    unique_points.dedup();
-    if unique_points.len() < 2 {
-        return Err("coordinate series must contain at least two unique values".to_string());
-    }
-    let mut unique_point_vec_array: Vec<[f64; 1]> = Vec::new();
-    for point in &unique_points {
-        unique_point_vec_array.push([*point])
-    }
-
-    let kdtree: ImmutableKdTree<f64, 1> = ImmutableKdTree::new_from_slice(&unique_point_vec_array);
-
-    // println!("{:?}", unique_points);
-    // let total_unique_points = unique_points.len();
-    // println!("{:.2}% of values are unique.", (total_unique_points as f32)/(points.len() as f32)*100.0);
-    let mut distance_total: f64 = 0.0;
-
-    for point in points {
-        let result: f64 =
-            kdtree.nearest_n::<SquaredEuclidean>(&[point], NonZero::new(2).unwrap())[1].distance;
-        distance_total += result.sqrt().ln();
-    }
-    Ok(distance_total)
+    calc_one_d_nn(&points)
 }
 
-pub fn calc_two_d_nn(points_1: &Vec<f64>, points_2: &Vec<f64>) -> Result<f64, String> {
-    calc_joint_nn([points_1.as_slice(), points_2.as_slice()])
+pub fn calc_two_d_nn(points_1: &[f64], points_2: &[f64]) -> Result<f64, String> {
+    calc_two_d_nn_with_metrics(
+        points_1,
+        points_2,
+        [CoordinateMetric::Linear, CoordinateMetric::Linear],
+    )
+}
+
+pub fn calc_two_d_nn_with_metrics(
+    points_1: &[f64],
+    points_2: &[f64],
+    metrics: [CoordinateMetric; 2],
+) -> Result<f64, String> {
+    calc_joint_nn_with_metrics([points_1, points_2], metrics)
 }
 
 pub fn calc_three_d_nn(
-    points_1: &Vec<f64>,
-    points_2: &Vec<f64>,
-    points_3: &Vec<f64>,
+    points_1: &[f64],
+    points_2: &[f64],
+    points_3: &[f64],
 ) -> Result<f64, String> {
-    calc_joint_nn([
-        points_1.as_slice(),
-        points_2.as_slice(),
-        points_3.as_slice(),
-    ])
+    calc_three_d_nn_with_metrics(points_1, points_2, points_3, [CoordinateMetric::Linear; 3])
+}
+
+pub fn calc_three_d_nn_with_metrics(
+    points_1: &[f64],
+    points_2: &[f64],
+    points_3: &[f64],
+    metrics: [CoordinateMetric; 3],
+) -> Result<f64, String> {
+    calc_joint_nn_with_metrics([points_1, points_2, points_3], metrics)
 }
 
 pub fn calc_four_d_nn(
-    points_1: &Vec<f64>,
-    points_2: &Vec<f64>,
-    points_3: &Vec<f64>,
-    points_4: &Vec<f64>,
+    points_1: &[f64],
+    points_2: &[f64],
+    points_3: &[f64],
+    points_4: &[f64],
 ) -> Result<f64, String> {
-    calc_joint_nn([
-        points_1.as_slice(),
-        points_2.as_slice(),
-        points_3.as_slice(),
-        points_4.as_slice(),
-    ])
+    calc_four_d_nn_with_metrics(
+        points_1,
+        points_2,
+        points_3,
+        points_4,
+        [CoordinateMetric::Linear; 4],
+    )
 }
 
-fn calc_joint_nn<const K: usize>(coordinates: [&[f64]; K]) -> Result<f64, String> {
+pub fn calc_four_d_nn_with_metrics(
+    points_1: &[f64],
+    points_2: &[f64],
+    points_3: &[f64],
+    points_4: &[f64],
+    metrics: [CoordinateMetric; 4],
+) -> Result<f64, String> {
+    calc_joint_nn_with_metrics([points_1, points_2, points_3, points_4], metrics)
+}
+
+fn point_cmp<const K: usize>(left: &[f64; K], right: &[f64; K]) -> std::cmp::Ordering {
+    for dimension in 0..K {
+        let ordering = left[dimension].total_cmp(&right[dimension]);
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn periodic_query_images<const K: usize>(
+    point: [f64; K],
+    metrics: [CoordinateMetric; K],
+) -> Vec<[f64; K]> {
+    let mut images = vec![point];
+    for dimension in 0..K {
+        if let CoordinateMetric::Periodic { period } = metrics[dimension] {
+            let existing = images.clone();
+            for image in existing {
+                let mut below = image;
+                below[dimension] -= period;
+                images.push(below);
+                let mut above = image;
+                above[dimension] += period;
+                images.push(above);
+            }
+        }
+    }
+    images
+}
+
+#[allow(clippy::needless_range_loop)]
+fn calc_joint_nn_with_metrics<const K: usize>(
+    coordinates: [&[f64]; K],
+    metrics: [CoordinateMetric; K],
+) -> Result<f64, String> {
     let points_len = coordinates[0].len();
     if points_len < 2 {
         return Err(format!(
@@ -443,26 +551,49 @@ fn calc_joint_nn<const K: usize>(coordinates: [&[f64]; K]) -> Result<f64, String
             "all coordinate series must have equal length for {K}D nearest neighbor"
         ));
     }
+    validate_metrics(&metrics, K)?;
 
     let mut points: Vec<[f64; K]> = Vec::with_capacity(points_len);
     for frame_idx in 0..points_len {
         let mut point = [0.0; K];
         for dimension_idx in 0..K {
-            point[dimension_idx] = coordinates[dimension_idx][frame_idx];
+            let value = coordinates[dimension_idx][frame_idx];
+            if !value.is_finite() {
+                return Err(format!(
+                    "coordinate {dimension_idx} contains non-finite values"
+                ));
+            }
+            point[dimension_idx] = metrics[dimension_idx].canonicalize(value);
         }
         points.push(point);
     }
 
-    let kdtree: ImmutableKdTree<f64, K> = ImmutableKdTree::new_from_slice(&points);
+    let mut unique_points = points.clone();
+    unique_points.sort_by(point_cmp);
+    unique_points.dedup_by(|left, right| point_cmp(left, right).is_eq());
+    if unique_points.len() < 2 {
+        return Err(format!(
+            "need at least two distinct points for {K}D nearest neighbor"
+        ));
+    }
+
+    let kdtree: ImmutableKdTree<f64, K> = ImmutableKdTree::new_from_slice(&unique_points);
+    let query_count = NonZero::new(unique_points.len().min(2)).unwrap();
     let mut distance_total: f64 = 0.0;
     for point in points {
-        let neighbor_count = if points_len < 8 { points_len } else { 8 };
-        let result = kdtree
-            .nearest_n::<SquaredEuclidean>(&point, NonZero::new(neighbor_count).unwrap())
+        let self_index = unique_points
+            .binary_search_by(|candidate| point_cmp(candidate, &point))
+            .map_err(|_| "canonical coordinate point was not found".to_string())?;
+        let result = periodic_query_images(point, metrics)
             .into_iter()
-            .skip(1)
+            .flat_map(|image| {
+                kdtree
+                    .nearest_n::<SquaredEuclidean>(&image, query_count)
+                    .into_iter()
+            })
+            .filter(|neighbor| neighbor.item as usize != self_index)
             .map(|neighbor| neighbor.distance)
-            .find(|distance| *distance > 0.0)
+            .min_by(f64::total_cmp)
             .ok_or_else(|| {
                 format!("need at least two distinct points for {K}D nearest neighbor")
             })?;
@@ -477,9 +608,6 @@ pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     (0..size).map(|_| normal.sample(&mut rng)).collect()
 }
 
-fn distance(first_point: f64, second_points: f64) -> f64 {
-    (first_point - second_points).abs()
-}
 pub fn estimate_entropy(
     nn_distance: f64,
     n_frames: usize,
@@ -539,6 +667,7 @@ pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{binomial, combination_from_rank};
 
@@ -669,31 +798,30 @@ pub fn calc_torsion(atom_1: [f64; 3], atom_2: [f64; 3], atom_3: [f64; 3], atom_4
 
 // Equivalent to intC(batList, traj) in Joe Cruz's code
 pub fn calc_internal_coords(bat_list: Vec<Vec<usize>>, traj: Vec<Vec<[f64; 3]>>) -> Vec<Vec<f64>> {
-    let n_frames: usize = traj.len();
     let n_int_coords: usize = bat_list.len();
 
     let mut internal_coords: Vec<Vec<f64>> = Vec::new();
 
-    for i in 0..n_frames as usize {
+    for frame in &traj {
         let mut frame_coords: Vec<f64> = Vec::new();
-        for j in 0..n_int_coords as usize {
+        for j in 0..n_int_coords {
             if bat_list[j].len() == 2 {
-                frame_coords.push(calc_bond(traj[i][bat_list[j][0]], traj[i][bat_list[j][1]]));
+                frame_coords.push(calc_bond(frame[bat_list[j][0]], frame[bat_list[j][1]]));
                 // println!("{:?}", j);
             }
             if bat_list[j].len() == 3 {
                 frame_coords.push(calc_angle(
-                    traj[i][bat_list[j][0]],
-                    traj[i][bat_list[j][1]],
-                    traj[i][bat_list[j][2]],
+                    frame[bat_list[j][0]],
+                    frame[bat_list[j][1]],
+                    frame[bat_list[j][2]],
                 ));
             }
             if bat_list[j].len() == 4 {
                 frame_coords.push(calc_torsion(
-                    traj[i][bat_list[j][0]],
-                    traj[i][bat_list[j][1]],
-                    traj[i][bat_list[j][2]],
-                    traj[i][bat_list[j][3]],
+                    frame[bat_list[j][0]],
+                    frame[bat_list[j][1]],
+                    frame[bat_list[j][2]],
+                    frame[bat_list[j][3]],
                 ));
             }
         }

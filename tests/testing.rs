@@ -2,6 +2,17 @@ use assert_approx_eq::assert_approx_eq;
 use nn_entropy::*;
 use rand_distr::{Distribution, Normal};
 
+fn kl_constant(n_frames: usize, dimensions: usize) -> f64 {
+    let volume = match dimensions {
+        1 => 2.0,
+        2 => std::f64::consts::PI,
+        3 => 4.0 * std::f64::consts::PI / 3.0,
+        4 => std::f64::consts::PI.powi(2) / 2.0,
+        _ => unreachable!(),
+    };
+    (n_frames as f64).ln() + 0.57721566490153 + volume.ln()
+}
+
 #[test]
 fn test_one_d_nn_real_data() {
     let coord = vec![
@@ -27,10 +38,130 @@ fn test_one_d_nn_real_data_with_repeats() {
 }
 
 #[test]
+fn test_one_d_nn_handles_nonconsecutive_repeats() {
+    let coord = vec![0.0, 1.0, 0.0, 1.0, 0.0, 2.0];
+    let ln_distance = calc_one_d_nn(&coord).expect("calc_one_d_nn failed");
+    assert_approx_eq!(ln_distance, 0.0);
+}
+
+#[test]
+fn test_joint_nn_handles_more_than_eight_duplicate_samples() {
+    let coord_1 = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    let coord_2 = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    let ln_distance = calc_two_d_nn(&coord_1, &coord_2).expect("calc_two_d_nn failed");
+    assert_approx_eq!(ln_distance, 10.0 * 2.0_f64.sqrt().ln());
+}
+
+#[test]
+fn test_periodic_metric_crosses_branch_cut() {
+    let epsilon = 0.01;
+    let points = vec![
+        epsilon,
+        2.0 * std::f64::consts::PI - epsilon,
+        std::f64::consts::PI,
+    ];
+    let metric = CoordinateMetric::Periodic {
+        period: 2.0 * std::f64::consts::PI,
+    };
+    let actual = calc_one_d_nn_with_metric(&points, metric).expect("periodic NN failed");
+    let expected = 2.0 * (2.0 * epsilon).ln() + (std::f64::consts::PI - epsilon).ln();
+    assert_approx_eq!(actual, expected, 1e-12);
+}
+
+#[test]
+fn test_periodic_metric_canonicalizes_out_of_range_values() {
+    let period = 2.0 * std::f64::consts::PI;
+    let canonical = vec![0.1, 1.0, 2.0];
+    let shifted = vec![0.1 + period, 1.0 - period, 2.0 + 2.0 * period];
+    let metric = CoordinateMetric::Periodic { period };
+    let expected = calc_one_d_nn_with_metric(&canonical, metric).unwrap();
+    let actual = calc_one_d_nn_with_metric(&shifted, metric).unwrap();
+    assert_approx_eq!(actual, expected, 1e-12);
+}
+
+#[test]
+fn test_four_dimensional_mixed_metrics_match_brute_force() {
+    let period = 2.0 * std::f64::consts::PI;
+    let coordinates = [
+        vec![0.0, 0.2, 1.0, 1.4],
+        vec![0.01, period - 0.01, 2.0, 3.0],
+        vec![1.0, 1.1, 1.4, 2.0],
+        vec![period - 0.02, 0.02, 1.5, 2.5],
+    ];
+    let metrics = [
+        CoordinateMetric::Linear,
+        CoordinateMetric::Periodic { period },
+        CoordinateMetric::Linear,
+        CoordinateMetric::Periodic { period },
+    ];
+    let actual = calc_four_d_nn_with_metrics(
+        &coordinates[0],
+        &coordinates[1],
+        &coordinates[2],
+        &coordinates[3],
+        metrics,
+    )
+    .unwrap();
+
+    let mut expected = 0.0;
+    for frame in 0..coordinates[0].len() {
+        let mut nearest = f64::INFINITY;
+        for other in 0..coordinates[0].len() {
+            if frame == other {
+                continue;
+            }
+            let squared = (0..4)
+                .map(|dimension| {
+                    let delta =
+                        (coordinates[dimension][frame] - coordinates[dimension][other]).abs();
+                    let delta = match metrics[dimension] {
+                        CoordinateMetric::Linear => delta,
+                        CoordinateMetric::Periodic { period } => delta.min(period - delta),
+                    };
+                    delta * delta
+                })
+                .sum::<f64>();
+            nearest = nearest.min(squared.sqrt());
+        }
+        expected += nearest.ln();
+    }
+    assert_approx_eq!(actual, expected, 1e-12);
+}
+
+#[test]
+fn test_python_compatible_asymptotic_constant() {
+    let data = vec![vec![0.0, 1.0]];
+    let entropy = calculate_entropy_from_data_with_order(data, 2, 1).unwrap();
+    let expected = (4.0_f64).ln() + 0.57721566490153;
+    assert_approx_eq!(entropy, expected, 1e-12);
+}
+
+#[test]
+fn test_invalid_metric_metadata_is_rejected() {
+    let data = vec![vec![0.0, 1.0], vec![1.0, 2.0]];
+    let err =
+        calculate_entropy_from_data_with_metrics(data.clone(), 2, 1, &[CoordinateMetric::Linear])
+            .expect_err("metric count should be validated");
+    assert!(err.contains("metrics"));
+
+    let err = calculate_entropy_from_data_with_metrics(
+        data,
+        2,
+        1,
+        &[
+            CoordinateMetric::Linear,
+            CoordinateMetric::Periodic { period: 0.0 },
+        ],
+    )
+    .expect_err("period should be validated");
+    assert!(err.contains("positive"));
+}
+
+#[test]
 fn test_one_d_nn_constant_series_is_invalid() {
     let coord: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0];
     let err = calc_one_d_nn(&coord).expect_err("expected error for constant series");
-    assert!(err.contains("unique"));
+    assert!(err.contains("distinct"));
 }
 
 #[test]
@@ -69,9 +200,8 @@ fn test_coordinate_mutual_information_returns_pairwise_mi() {
     let coord_2 = vec![1.0, 1.3, 1.9, 2.2, 2.8];
     let data = vec![coord_1.clone(), coord_2.clone()];
     let n_frames = data[0].len();
-    const EULER: f64 = 0.57721566490153;
-    let one_d_constant = ((n_frames as f64) * 2.0).ln() + EULER;
-    let two_d_constant = ((n_frames as f64) * std::f64::consts::PI).ln() + EULER;
+    let one_d_constant = kl_constant(n_frames, 1);
+    let two_d_constant = kl_constant(n_frames, 2);
 
     let pairwise_mi = estimate_coordinate_mutual_information_rust(data, n_frames)
         .expect("coordinate mutual information failed");
@@ -120,8 +250,7 @@ fn test_third_order_entropy_for_three_coordinates_matches_joint_entropy() {
     let coord_3 = vec![2.0, 2.4, 2.7, 3.1, 3.5];
     let data = vec![coord_1.clone(), coord_2.clone(), coord_3.clone()];
     let n_frames = data[0].len();
-    const EULER: f64 = 0.57721566490153;
-    let three_d_constant = ((n_frames as f64) * 4.0 * std::f64::consts::PI / 3.0).ln() + EULER;
+    let three_d_constant = kl_constant(n_frames, 3);
 
     let entropy =
         calculate_entropy_from_data_with_order(data, n_frames, 3).expect("order-3 entropy failed");
@@ -147,8 +276,7 @@ fn test_fourth_order_entropy_for_four_coordinates_matches_joint_entropy() {
         coord_4.clone(),
     ];
     let n_frames = data[0].len();
-    const EULER: f64 = 0.57721566490153;
-    let four_d_constant = ((n_frames as f64) * std::f64::consts::PI.powi(2) / 2.0).ln() + EULER;
+    let four_d_constant = kl_constant(n_frames, 4);
 
     let entropy =
         calculate_entropy_from_data_with_order(data, n_frames, 4).expect("order-4 entropy failed");

@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+use crate::CoordinateMetric;
+
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Debug, Clone)]
@@ -178,15 +180,15 @@ fn parse_prmtop_from_pointers(
     for i in 0..bond_h_count {
         let a = bond_h_tokens[i * 3].parse::<i64>()?;
         let b = bond_h_tokens[i * 3 + 1].parse::<i64>()?;
-        let ai = (a.abs() as usize) / 3;
-        let bi = (b.abs() as usize) / 3;
+        let ai = (a.unsigned_abs() as usize) / 3;
+        let bi = (b.unsigned_abs() as usize) / 3;
         bonds.push((ai, bi));
     }
     for i in 0..bond_no_h_count {
         let a = bond_no_h_tokens[i * 3].parse::<i64>()?;
         let b = bond_no_h_tokens[i * 3 + 1].parse::<i64>()?;
-        let ai = (a.abs() as usize) / 3;
-        let bi = (b.abs() as usize) / 3;
+        let ai = (a.unsigned_abs() as usize) / 3;
+        let bi = (b.unsigned_abs() as usize) / 3;
         bonds.push((ai, bi));
     }
 
@@ -647,7 +649,7 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
                     .copied()
                     .collect();
                 let a2_sorted = sort_atoms_by_mass(&a2_list, masses, false);
-                for &a2 in a2_sorted.iter() {
+                if let Some(&a2) = a2_sorted.first() {
                     let a3_list: Vec<usize> = adjacency[a2]
                         .iter()
                         .filter(|n| {
@@ -656,13 +658,11 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
                         .copied()
                         .collect();
                     let a3_sorted = sort_atoms_by_mass(&a3_list, masses, false);
-                    for &a3 in a3_sorted.iter() {
+                    if let Some(&a3) = a3_sorted.first() {
                         torsions.push([a0, a1, a2, a3]);
                         selected_atoms.push(a0);
                         torsion_added = true;
-                        break;
                     }
-                    break;
                 }
             }
             idx += 1;
@@ -783,10 +783,12 @@ fn build_bat_list(
     let fragment_set: HashSet<usize> = fragment.iter().copied().collect();
     for &a in fragment {
         for &b in adjacency[a].iter() {
-            if a < b && fragment_set.contains(&b) {
-                if !hydrogens.contains(&a) && !hydrogens.contains(&b) {
-                    bat_list.push(vec![a, b]);
-                }
+            if a < b
+                && fragment_set.contains(&b)
+                && !hydrogens.contains(&a)
+                && !hydrogens.contains(&b)
+            {
+                bat_list.push(vec![a, b]);
             }
         }
     }
@@ -956,12 +958,27 @@ impl InternalCoordinates {
         let mut pairs = Vec::new();
         for i in 0..self.dim {
             for j in 0..self.dim {
-                if i == j || i > j {
+                if i >= j {
                     continue;
                 }
                 pairs.push((i, j));
             }
         }
         self.pairs = pairs;
+    }
+
+    pub fn coordinate_metrics(&self) -> Vec<CoordinateMetric> {
+        self.bat_list
+            .iter()
+            .map(|entry| {
+                if entry.len() == 4 {
+                    CoordinateMetric::Periodic {
+                        period: 2.0 * std::f64::consts::PI,
+                    }
+                } else {
+                    CoordinateMetric::Linear
+                }
+            })
+            .collect()
     }
 }

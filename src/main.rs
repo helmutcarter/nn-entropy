@@ -2,13 +2,13 @@ use std::env;
 use std::path::Path;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::calculate_entropy_from_data_with_order;
+use nn_entropy::{CoordinateMetric, calculate_entropy_from_data_with_metrics};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--start N] [--stop N] [--mie-order 1|2|3|4]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--no-periodic] [--start N] [--stop N] [--stride N] [--mie-order 1|2|3|4]",
             args[0]
         );
         std::process::exit(1);
@@ -17,15 +17,21 @@ fn main() {
     let traj_path = Path::new(&args[2]);
 
     let mut torsions_only = false;
+    let mut no_periodic = false;
     let mut start: Option<usize> = None;
     let mut stop: Option<usize> = None;
     let mut use_python = false;
     let mut mie_order = 2;
+    let mut stride = 1usize;
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
             "--torsions-only" => {
                 torsions_only = true;
+                i += 1;
+            }
+            "--no-periodic" => {
+                no_periodic = true;
                 i += 1;
             }
             "--start" => {
@@ -54,6 +60,16 @@ fn main() {
                     .expect("invalid --mie-order value");
                 i += 2;
             }
+            "--stride" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--stride requires a value");
+                    std::process::exit(1);
+                }
+                stride = args[i + 1]
+                    .parse::<usize>()
+                    .expect("invalid --stride value");
+                i += 2;
+            }
             "--python" => {
                 use_python = true;
                 i += 1;
@@ -68,10 +84,18 @@ fn main() {
         eprintln!("--mie-order must be 1, 2, 3, or 4");
         std::process::exit(1);
     }
+    if stride == 0 {
+        eprintln!("--stride must be at least 1");
+        std::process::exit(1);
+    }
 
     if use_python {
         if !cfg!(debug_assertions) {
             eprintln!("--python is only available in debug builds.");
+            std::process::exit(1);
+        }
+        if stride != 1 {
+            eprintln!("--stride is not supported by the legacy --python comparison mode.");
             std::process::exit(1);
         }
         let script = "/gibbs/helmut/code/python_scripts/NN_entropy_calc_rusty.py";
@@ -93,8 +117,8 @@ fn main() {
         let entropy = stdout
             .trim()
             .split(',')
-            .last()
-            .and_then(|s| s.trim().split_whitespace().next())
+            .next_back()
+            .and_then(|s| s.split_whitespace().next())
             .and_then(|s| s.parse::<f64>().ok())
             .expect("failed to parse python entropy output");
         println!("Total entropy = {}", entropy);
@@ -117,14 +141,24 @@ fn main() {
         eprintln!("--start is beyond available frames.");
         std::process::exit(1);
     }
-    let dim = internal.int_coords.get(0).map(|row| row.len()).unwrap_or(0);
+    let dim = internal
+        .int_coords
+        .first()
+        .map(|row| row.len())
+        .unwrap_or(0);
     if dim == 0 {
         eprintln!("No internal coordinates were generated.");
         std::process::exit(1);
     }
 
-    let mut one_d_data: Vec<Vec<f64>> = vec![Vec::with_capacity(frames - start); dim];
-    for frame in &internal.int_coords[start..] {
+    let metrics = if no_periodic {
+        vec![CoordinateMetric::Linear; dim]
+    } else {
+        internal.coordinate_metrics()
+    };
+    let selected_frames = (frames - start).div_ceil(stride);
+    let mut one_d_data: Vec<Vec<f64>> = vec![Vec::with_capacity(selected_frames); dim];
+    for frame in internal.int_coords.iter().skip(start).step_by(stride) {
         if frame.len() != dim {
             eprintln!("Inconsistent internal coordinate dimensions.");
             std::process::exit(1);
@@ -135,7 +169,12 @@ fn main() {
     }
 
     let used_frames = one_d_data[0].len();
-    let entropy = match calculate_entropy_from_data_with_order(one_d_data, used_frames, mie_order) {
+    let entropy = match calculate_entropy_from_data_with_metrics(
+        one_d_data,
+        used_frames,
+        mie_order,
+        &metrics,
+    ) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("Entropy calculation failed: {err}");
