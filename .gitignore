@@ -4,3 +4,5 @@
 *.code-workspace
 /reference
 /tmp
+*.csv
+*.pyc
