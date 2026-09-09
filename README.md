@@ -23,7 +23,7 @@ cargo build --release
 ## CLI usage
 
 ```bash
-cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--no-periodic] [--start N] [--stop N] [--stride N] [--mie-order 1|2|3|4]
+cargo run --release <path_to_parm7> <path_to_nc> [--torsions-only] [--no-periodic] [--exact-constant] [--start N] [--stop N] [--stride N] [--mie-order 1|2|3|4]
 ```
 
 Example:
@@ -38,6 +38,7 @@ Notes:
 - `--stride` retains every Nth frame after `--start` (default: 1). Choose a stride based on a separate correlation-time analysis; the crate does not estimate an effective sample size automatically.
 - `--mie-order` selects the expansion order. The default is 2, matching previous behavior.
 - `--no-periodic` forces every coordinate to use an ordinary linear metric. This is intended for compatibility checks and diagnostics; file-based BAT calculations otherwise use the scientifically preferred periodic torsion metric.
+- `--exact-constant` uses the exact finite-sample term `psi(N) - psi(1) = H_(N-1)`. The default remains the historical Python-compatible approximation `ln(N) + EulerGamma`.
 
 ## Rust library usage
 
@@ -51,6 +52,7 @@ let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
 Other helpers:
 - `calculate_entropy_from_data_with_order` for explicit MIE order 1, 2, 3, or 4.
 - `calculate_entropy_from_data_with_metrics` for explicit per-coordinate `CoordinateMetric::Linear` or `CoordinateMetric::Periodic { period }` metadata.
+- `calculate_entropy_from_data_with_metrics_and_constant` additionally selects `FiniteSampleConstant::PythonCompatibleAsymptotic` or `FiniteSampleConstant::Exact`.
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
 - `estimate_coordinate_mie_entropy_rust` for per-coordinate second-order MIE entropy contributions. Each pairwise mutual information term is split evenly between the two coordinates, so the returned values sum to the order-2 total entropy.

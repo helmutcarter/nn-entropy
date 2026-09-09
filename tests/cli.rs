@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::calculate_entropy_from_data_with_order;
+use nn_entropy::{
+    CoordinateMetric, FiniteSampleConstant, calculate_entropy_from_data_with_metrics_and_constant,
+    calculate_entropy_from_data_with_order,
+};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -69,4 +72,43 @@ fn periodic_remains_the_default() {
         .unwrap();
     assert!(periodic.status.success() && linear.status.success());
     assert!((parse_entropy(&periodic.stdout) - parse_entropy(&linear.stdout)).abs() > 1.0);
+}
+
+#[test]
+fn exact_constant_flag_selects_exact_finite_sample_term() {
+    let top = fixture("tests/fixtures/test.parm7");
+    let traj = fixture("tests/fixtures/test.nc");
+    let output = Command::new(env!("CARGO_BIN_EXE_nn_entropy"))
+        .args([
+            top.to_str().unwrap(),
+            traj.to_str().unwrap(),
+            "--no-periodic",
+            "--exact-constant",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let mut internal = InternalCoordinates::new(&top).unwrap();
+    internal
+        .calculate_internal_coords(&traj, usize::MAX, false)
+        .unwrap();
+    let frames = internal.int_coords.len();
+    let dimensions = internal.int_coords[0].len();
+    let mut data = vec![Vec::with_capacity(frames); dimensions];
+    for frame in internal.int_coords {
+        for (dimension, value) in frame.into_iter().enumerate() {
+            data[dimension].push(value);
+        }
+    }
+    let metrics = vec![CoordinateMetric::Linear; dimensions];
+    let expected = calculate_entropy_from_data_with_metrics_and_constant(
+        data,
+        frames,
+        2,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .unwrap();
+    assert!((parse_entropy(&output.stdout) - expected).abs() < 1e-12);
 }

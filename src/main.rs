@@ -2,13 +2,15 @@ use std::env;
 use std::path::Path;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{CoordinateMetric, calculate_entropy_from_data_with_metrics};
+use nn_entropy::{
+    CoordinateMetric, FiniteSampleConstant, calculate_entropy_from_data_with_metrics_and_constant,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--no-periodic] [--start N] [--stop N] [--stride N] [--mie-order 1|2|3|4]",
+            "Usage: {} <path_to_parm7> <path_to_nc> [--torsions-only] [--no-periodic] [--exact-constant] [--start N] [--stop N] [--stride N] [--mie-order 1|2|3|4]",
             args[0]
         );
         std::process::exit(1);
@@ -18,6 +20,7 @@ fn main() {
 
     let mut torsions_only = false;
     let mut no_periodic = false;
+    let mut exact_constant = false;
     let mut start: Option<usize> = None;
     let mut stop: Option<usize> = None;
     let mut use_python = false;
@@ -32,6 +35,10 @@ fn main() {
             }
             "--no-periodic" => {
                 no_periodic = true;
+                i += 1;
+            }
+            "--exact-constant" => {
+                exact_constant = true;
                 i += 1;
             }
             "--start" => {
@@ -96,6 +103,10 @@ fn main() {
         }
         if stride != 1 {
             eprintln!("--stride is not supported by the legacy --python comparison mode.");
+            std::process::exit(1);
+        }
+        if exact_constant {
+            eprintln!("--exact-constant is not supported by the legacy --python mode.");
             std::process::exit(1);
         }
         let script = "/gibbs/helmut/code/python_scripts/NN_entropy_calc_rusty.py";
@@ -169,11 +180,17 @@ fn main() {
     }
 
     let used_frames = one_d_data[0].len();
-    let entropy = match calculate_entropy_from_data_with_metrics(
+    let constant = if exact_constant {
+        FiniteSampleConstant::Exact
+    } else {
+        FiniteSampleConstant::PythonCompatibleAsymptotic
+    };
+    let entropy = match calculate_entropy_from_data_with_metrics_and_constant(
         one_d_data,
         used_frames,
         mie_order,
         &metrics,
+        constant,
     ) {
         Ok(value) => value,
         Err(err) => {

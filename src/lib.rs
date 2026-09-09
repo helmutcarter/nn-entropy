@@ -16,6 +16,15 @@ pub enum CoordinateMetric {
     Periodic { period: f64 },
 }
 
+/// Sample-size term used in the Kozachenko-Leonenko entropy constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiniteSampleConstant {
+    /// Historical Python-compatible large-sample approximation: ln(N) + gamma.
+    PythonCompatibleAsymptotic,
+    /// Exact k=1 finite-sample term: psi(N) - psi(1) = H_(N-1).
+    Exact,
+}
+
 impl CoordinateMetric {
     fn validate(self, index: usize) -> Result<(), String> {
         if let Self::Periodic { period } = self
@@ -80,6 +89,18 @@ fn validate_metrics(metrics: &[CoordinateMetric], dimensions: usize) -> Result<(
 }
 
 fn entropy_constant(n_frames: usize, dimensions: usize) -> Result<f64, String> {
+    entropy_constant_with_convention(
+        n_frames,
+        dimensions,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+}
+
+fn entropy_constant_with_convention(
+    n_frames: usize,
+    dimensions: usize,
+    convention: FiniteSampleConstant,
+) -> Result<f64, String> {
     let log_unit_ball_volume = match dimensions {
         1 => 2.0_f64.ln(),
         2 => std::f64::consts::PI.ln(),
@@ -91,11 +112,14 @@ fn entropy_constant(n_frames: usize, dimensions: usize) -> Result<f64, String> {
             ));
         }
     };
-    // Deliberately match the historical Python implementation. The exact
-    // finite-sample term is psi(N) - psi(1) = H_(N-1); ln(N) + gamma is its
-    // large-N approximation.
     const EULER_MASCHERONI: f64 = 0.57721566490153;
-    Ok((n_frames as f64).ln() + EULER_MASCHERONI + log_unit_ball_volume)
+    let sample_term = match convention {
+        FiniteSampleConstant::PythonCompatibleAsymptotic => {
+            (n_frames as f64).ln() + EULER_MASCHERONI
+        }
+        FiniteSampleConstant::Exact => (1..n_frames).map(|i| 1.0 / i as f64).sum(),
+    };
+    Ok(sample_term + log_unit_ball_volume)
 }
 
 fn binomial(n: usize, k: usize) -> usize {
@@ -149,6 +173,22 @@ pub fn calculate_entropy_from_data_with_metrics(
     mie_order: usize,
     metrics: &[CoordinateMetric],
 ) -> Result<f64, String> {
+    calculate_entropy_from_data_with_metrics_and_constant(
+        one_d_data,
+        frames_end,
+        mie_order,
+        metrics,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+}
+
+pub fn calculate_entropy_from_data_with_metrics_and_constant(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    mie_order: usize,
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+) -> Result<f64, String> {
     if !(1..=4).contains(&mie_order) {
         return Err(format!(
             "unsupported MIE order {mie_order}; supported orders are 1, 2, 3, and 4"
@@ -164,10 +204,10 @@ pub fn calculate_entropy_from_data_with_metrics(
 
     let n_frames = one_d_data[0].len();
     let degrees_freedom = one_d_data.len();
-    let one_d_constant = entropy_constant(n_frames, 1)?;
-    let two_d_constant = entropy_constant(n_frames, 2)?;
-    let three_d_constant = entropy_constant(n_frames, 3)?;
-    let four_d_constant = entropy_constant(n_frames, 4)?;
+    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
+    let two_d_constant = entropy_constant_with_convention(n_frames, 2, constant)?;
+    let three_d_constant = entropy_constant_with_convention(n_frames, 3, constant)?;
+    let four_d_constant = entropy_constant_with_convention(n_frames, 4, constant)?;
 
     let one_d_distances_total: f64 = one_d_data
         .par_iter()

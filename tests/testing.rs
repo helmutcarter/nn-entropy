@@ -137,6 +137,21 @@ fn test_python_compatible_asymptotic_constant() {
 }
 
 #[test]
+fn test_exact_finite_sample_constant() {
+    let data = vec![vec![0.0, 1.0]];
+    let entropy = calculate_entropy_from_data_with_metrics_and_constant(
+        data,
+        2,
+        1,
+        &[CoordinateMetric::Linear],
+        FiniteSampleConstant::Exact,
+    )
+    .unwrap();
+    let expected = 1.0 + 2.0_f64.ln();
+    assert_approx_eq!(entropy, expected, 1e-12);
+}
+
+#[test]
 fn test_invalid_metric_metadata_is_rejected() {
     let data = vec![vec![0.0, 1.0], vec![1.0, 2.0]];
     let err =
