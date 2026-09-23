@@ -6,3 +6,4 @@
 /tmp
 *.csv
 *.pyc
+scripts/*
