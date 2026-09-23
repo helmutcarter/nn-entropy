@@ -1,5 +1,7 @@
 # nn-entropy
 
+[![CI](https://github.com/helmutcarter/nn-entropy/actions/workflows/ci.yml/badge.svg)](https://github.com/helmutcarter/nn-entropy/actions/workflows/ci.yml)
+
 Estimate the configurational entropy of a molecular system, with a Rust library, CLI, and Python bindings.
 
 This crate provides non-parametric entropy estimation using the nearest-neighbor method with mutual information expansion on internal coordinates (bond lengths, bond angles, and torsion angles) with built-in conversion from MD trajectory files. File-based calculations use linear metrics for bonds and angles and a 2π-periodic metric for torsions.
@@ -108,6 +110,19 @@ Threading note:
 ```bash
 cargo test --release
 ```
+
+The Rust suite does not link the Python extension, so the bindings have a
+separate smoke test that runs against a built wheel:
+
+```bash
+maturin build --out dist
+pip install --no-index --find-links dist nn_entropy
+python tests/python_smoke.py
+```
+
+CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -D warnings`
+and `cargo test` on every push and pull request, plus the wheel build and smoke
+test on Python 3.10 and 3.12.
 
 ## Project layout
 - `src/lib.rs`: core entropy estimation and internal coordinate utilities.
