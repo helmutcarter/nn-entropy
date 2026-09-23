@@ -38,9 +38,9 @@ Notes:
 - `--stop` limits the number of frames read to N.
 - `--start` skips the first N frames.
 - `--stride` retains every Nth frame after `--start` (default: 1). Choose a stride based on a separate correlation-time analysis; the crate does not estimate an effective sample size automatically.
-- `--mie-order` selects the expansion order. The default is 2, matching previous behavior.
-- `--no-periodic` forces every coordinate to use an ordinary linear metric. This is intended for compatibility checks and diagnostics; file-based BAT calculations otherwise use the scientifically preferred periodic torsion metric.
-- `--exact-constant` uses the exact finite-sample term `psi(N) - psi(1) = H_(N-1)`. The default remains the historical Python-compatible approximation `ln(N) + EulerGamma`.
+- `--mie-order` selects the expansion order. The default is 2, and this should be good for most applications.
+- `--no-periodic` forces every coordinate to use an ordinary linear metric. This produces a significant speedup, but the torsion entropy contribution loses some correctness.
+- `--exact-constant` uses the exact finite-sample term `psi(N) - psi(1) = H_(N-1)`. The default is the common approximation `ln(N) + EulerGamma`.
 
 ## Rust library usage
 
