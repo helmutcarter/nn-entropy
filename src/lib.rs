@@ -88,14 +88,6 @@ fn validate_metrics(metrics: &[CoordinateMetric], dimensions: usize) -> Result<(
     Ok(())
 }
 
-fn entropy_constant(n_frames: usize, dimensions: usize) -> Result<f64, String> {
-    entropy_constant_with_convention(
-        n_frames,
-        dimensions,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
-    )
-}
-
 fn entropy_constant_with_convention(
     n_frames: usize,
     dimensions: usize,
@@ -344,6 +336,20 @@ pub fn estimate_coordinate_entropy_with_metrics(
     frames_end: usize,
     metrics: &[CoordinateMetric],
 ) -> Result<Vec<f64>, String> {
+    estimate_coordinate_entropy_with_metrics_and_constant(
+        one_d_data,
+        frames_end,
+        metrics,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+}
+
+pub fn estimate_coordinate_entropy_with_metrics_and_constant(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+) -> Result<Vec<f64>, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
     validate_metrics(metrics, one_d_data.len())?;
 
@@ -354,7 +360,7 @@ pub fn estimate_coordinate_entropy_with_metrics(
 
     let n_frames: usize = one_d_data[0].len();
 
-    let one_d_constant = entropy_constant(n_frames, 1)?;
+    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
 
     let one_d_distances: Vec<f64> = one_d_data
         .par_iter()
@@ -385,6 +391,20 @@ pub fn estimate_coordinate_mutual_information_with_metrics(
     frames_end: usize,
     metrics: &[CoordinateMetric],
 ) -> Result<Vec<f64>, String> {
+    estimate_coordinate_mutual_information_with_metrics_and_constant(
+        one_d_data,
+        frames_end,
+        metrics,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+}
+
+pub fn estimate_coordinate_mutual_information_with_metrics_and_constant(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+) -> Result<Vec<f64>, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
     validate_metrics(metrics, one_d_data.len())?;
 
@@ -396,8 +416,8 @@ pub fn estimate_coordinate_mutual_information_with_metrics(
     let n_frames: usize = one_d_data[0].len();
     let degrees_freedom: usize = one_d_data.len();
 
-    let one_d_constant = entropy_constant(n_frames, 1)?;
-    let two_d_constant = entropy_constant(n_frames, 2)?;
+    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
+    let two_d_constant = entropy_constant_with_convention(n_frames, 2, constant)?;
 
     let one_d_entropies = one_d_data
         .par_iter()
@@ -445,18 +465,38 @@ pub fn estimate_coordinate_mie_entropy_with_metrics(
     frames_end: usize,
     metrics: &[CoordinateMetric],
 ) -> Result<Vec<f64>, String> {
+    estimate_coordinate_mie_entropy_with_metrics_and_constant(
+        one_d_data,
+        frames_end,
+        metrics,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+}
+
+pub fn estimate_coordinate_mie_entropy_with_metrics_and_constant(
+    one_d_data: Vec<Vec<f64>>,
+    frames_end: usize,
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+) -> Result<Vec<f64>, String> {
     validate_one_d_data(&one_d_data, frames_end)?;
     validate_metrics(metrics, one_d_data.len())?;
 
-    let coordinate_entropies =
-        estimate_coordinate_entropy_with_metrics(one_d_data.clone(), frames_end, metrics)?;
+    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
+        one_d_data.clone(),
+        frames_end,
+        metrics,
+        constant,
+    )?;
     let degrees_freedom = coordinate_entropies.len();
     if degrees_freedom == 1 {
         return Ok(coordinate_entropies);
     }
 
     let pairwise_mutual_information =
-        estimate_coordinate_mutual_information_with_metrics(one_d_data, frames_end, metrics)?;
+        estimate_coordinate_mutual_information_with_metrics_and_constant(
+            one_d_data, frames_end, metrics, constant,
+        )?;
     let mut coordinate_mie_entropy = coordinate_entropies;
     let mut pair_idx = 0;
     for i in 0..degrees_freedom {

@@ -56,6 +56,7 @@ Other helpers:
 - `estimate_coordinate_entropy_rust` for per-coordinate entropy.
 - `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
 - `estimate_coordinate_mie_entropy_rust` for per-coordinate second-order MIE entropy contributions. Each pairwise mutual information term is split evenly between the two coordinates, so the returned values sum to the order-2 total entropy.
+- Each per-coordinate estimator has a `_with_metrics` form for explicit coordinate metrics and a `_with_metrics_and_constant` form that also selects the finite-sample convention: `estimate_coordinate_entropy_with_metrics_and_constant`, `estimate_coordinate_mutual_information_with_metrics_and_constant`, and `estimate_coordinate_mie_entropy_with_metrics_and_constant`. Use these to keep per-coordinate values consistent with a total computed under `FiniteSampleConstant::Exact`; the shorter forms keep the historical `PythonCompatibleAsymptotic` convention.
 
 ## Python bindings
 
@@ -95,7 +96,7 @@ Threading note:
 ## Interpretation and limitations
 
 - Results are differential internal-coordinate entropies in natural-log units (equivalently, units of `k_B`), not kcal mol⁻¹ K⁻¹.
-- To remain numerically compatible with the historical Python implementation, the nearest-neighbor constant uses the large-sample approximation `ln(N) + EulerGamma` in place of the exact finite-sample term `psi(N) - psi(1) = H_(N-1)`. Their per-entropy difference is approximately `1/(2N)` and is negligible for the intended 50,000-frame calculations, but it can accumulate across MIE terms or become important for very small samples.
+- To remain numerically compatible with the historical Python implementation, the nearest-neighbor constant uses the large-sample approximation `ln(N) + EulerGamma` in place of the exact finite-sample term `psi(N) - psi(1) = H_(N-1)`. Their per-entropy difference is approximately `1/(2N)` and is negligible for the intended 50,000-frame calculations, but it can accumulate across MIE terms or become important for very small samples. The convention is a property of the estimator, not of the total alone: pairwise mutual information shifts by exactly `H_(N-1) - (ln(N) + EulerGamma)` per pair when it changes, so per-coordinate results must be computed under the same convention as the total they are compared against.
 - The default second-order mutual-information expansion is a truncation and can omit higher-order correlations.
 - The reported value does not include a BAT-to-Cartesian Jacobian correction, momentum entropy, or a standard-state term, and must not be described as an absolute thermodynamic entropy.
 - Exact duplicate samples use the nearest distinct coordinate point. Many ties usually indicate inadequate coordinate precision or sampling and should be investigated.

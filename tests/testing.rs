@@ -428,3 +428,212 @@ fn test_calc_internal_coords() {
         assert_approx_eq!(result[0][idx], expected_result[0][idx], 1e-5)
     }
 }
+
+/// Sample term of the Kozachenko-Leonenko constant, written out independently of
+/// the implementation. `PythonCompatibleAsymptotic` is `ln(N) + gamma`; `Exact`
+/// is the harmonic number `H_(N-1) = psi(N) - psi(1)`.
+fn sample_term(n_frames: usize, constant: FiniteSampleConstant) -> f64 {
+    match constant {
+        FiniteSampleConstant::PythonCompatibleAsymptotic => {
+            (n_frames as f64).ln() + 0.57721566490153
+        }
+        FiniteSampleConstant::Exact => (1..n_frames).map(|i| 1.0 / i as f64).sum(),
+    }
+}
+
+fn three_coordinate_sample() -> Vec<Vec<f64>> {
+    vec![
+        vec![0.1, 0.4, 0.8, 1.1, 1.7],
+        vec![1.0, 1.3, 1.9, 2.2, 2.8],
+        vec![2.0, 2.4, 2.7, 3.1, 3.5],
+    ]
+}
+
+#[test]
+fn coordinate_entropy_exact_constant_matches_closed_form() {
+    // One coordinate, two frames one unit apart: both nearest-neighbor distances
+    // are 1, so the log-distance sum vanishes and the estimate is the constant
+    // alone: ln(V_1) + H_(N-1) = ln(2) + 1.
+    let entropies = estimate_coordinate_entropy_with_metrics_and_constant(
+        vec![vec![0.0, 1.0]],
+        2,
+        &[CoordinateMetric::Linear],
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact-constant coordinate entropy failed");
+
+    assert_eq!(entropies.len(), 1);
+    assert_approx_eq!(entropies[0], 1.0 + 2.0_f64.ln(), 1e-12);
+}
+
+#[test]
+fn coordinate_entropies_sum_to_first_order_total_under_exact_constant() {
+    // The order-1 MIE total is by definition the sum of the per-coordinate
+    // entropies, so the two must agree under whichever convention is selected.
+    let data = three_coordinate_sample();
+    let n_frames = data[0].len();
+    let metrics = vec![CoordinateMetric::Linear; data.len()];
+
+    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact-constant coordinate entropy failed");
+    let total = calculate_entropy_from_data_with_metrics_and_constant(
+        data,
+        n_frames,
+        1,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact-constant order-1 entropy failed");
+
+    assert_approx_eq!(coordinate_entropies.iter().sum::<f64>(), total, 1e-12);
+}
+
+#[test]
+fn mutual_information_convention_shift_equals_sample_term_difference() {
+    // I_ij = S_i + S_j - S_ij, so the constants contribute 2*c_1 - c_2. The unit
+    // ball volumes cancel between the two conventions but one sample term does
+    // not, leaving exactly H_(N-1) - (ln N + gamma) for every pair.
+    let data = three_coordinate_sample();
+    let n_frames = data[0].len();
+    let metrics = vec![CoordinateMetric::Linear; data.len()];
+
+    let asymptotic = estimate_coordinate_mutual_information_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        FiniteSampleConstant::PythonCompatibleAsymptotic,
+    )
+    .expect("asymptotic mutual information failed");
+    let exact = estimate_coordinate_mutual_information_with_metrics_and_constant(
+        data,
+        n_frames,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact mutual information failed");
+
+    let expected_shift = sample_term(n_frames, FiniteSampleConstant::Exact)
+        - sample_term(n_frames, FiniteSampleConstant::PythonCompatibleAsymptotic);
+    assert!(
+        expected_shift.abs() > 1e-3,
+        "conventions must actually differ"
+    );
+
+    assert_eq!(exact.len(), 3);
+    assert_eq!(asymptotic.len(), 3);
+    for (pair, (exact_mi, asymptotic_mi)) in exact.iter().zip(asymptotic.iter()).enumerate() {
+        assert_approx_eq!(exact_mi - asymptotic_mi, expected_shift, 1e-12);
+        assert!(
+            (exact_mi - asymptotic_mi).abs() > 1e-3,
+            "pair {pair} should be sensitive to the constant"
+        );
+    }
+}
+
+#[test]
+fn coordinate_mie_entropy_sums_to_second_order_total_under_exact_constant() {
+    // Splitting each pairwise mutual information evenly between its two
+    // coordinates is an algebraic identity, so it must hold for the exact
+    // constant as well: sum_i m_i = sum_{i<j} S_ij - (n-2) sum_i S_i.
+    let data = three_coordinate_sample();
+    let n_frames = data[0].len();
+    let metrics = vec![CoordinateMetric::Linear; data.len()];
+
+    let coordinate_mie = estimate_coordinate_mie_entropy_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact-constant coordinate MIE entropy failed");
+    let total = calculate_entropy_from_data_with_metrics_and_constant(
+        data,
+        n_frames,
+        2,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("exact-constant order-2 entropy failed");
+
+    assert_approx_eq!(coordinate_mie.iter().sum::<f64>(), total, 1e-12);
+}
+
+#[test]
+fn coordinate_estimators_compose_exact_constant_with_periodic_metrics() {
+    // The constant must be threaded independently of the coordinate metric, so
+    // the periodic per-coordinate entropies still sum to the periodic order-1
+    // total under the exact convention.
+    let period = 2.0 * std::f64::consts::PI;
+    let data = vec![
+        vec![0.05, period - 0.05, 3.0, 3.4, 1.2],
+        vec![0.2, 0.9, period - 0.3, 2.2, 4.4],
+    ];
+    let n_frames = data[0].len();
+    let metrics = vec![CoordinateMetric::Periodic { period }; data.len()];
+
+    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("periodic exact-constant coordinate entropy failed");
+    let total = calculate_entropy_from_data_with_metrics_and_constant(
+        data,
+        n_frames,
+        1,
+        &metrics,
+        FiniteSampleConstant::Exact,
+    )
+    .expect("periodic exact-constant order-1 entropy failed");
+
+    assert_approx_eq!(coordinate_entropies.iter().sum::<f64>(), total, 1e-12);
+}
+
+#[test]
+fn coordinate_estimators_default_to_the_python_compatible_constant() {
+    // The historical entry points must keep the asymptotic convention.
+    let data = three_coordinate_sample();
+    let n_frames = data[0].len();
+    let metrics = vec![CoordinateMetric::Linear; data.len()];
+    let default_constant = FiniteSampleConstant::PythonCompatibleAsymptotic;
+
+    let entropy_default =
+        estimate_coordinate_entropy_with_metrics(data.clone(), n_frames, &metrics).unwrap();
+    let entropy_explicit = estimate_coordinate_entropy_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        default_constant,
+    )
+    .unwrap();
+    assert_eq!(entropy_default, entropy_explicit);
+
+    let mi_default =
+        estimate_coordinate_mutual_information_with_metrics(data.clone(), n_frames, &metrics)
+            .unwrap();
+    let mi_explicit = estimate_coordinate_mutual_information_with_metrics_and_constant(
+        data.clone(),
+        n_frames,
+        &metrics,
+        default_constant,
+    )
+    .unwrap();
+    assert_eq!(mi_default, mi_explicit);
+
+    let mie_default =
+        estimate_coordinate_mie_entropy_with_metrics(data.clone(), n_frames, &metrics).unwrap();
+    let mie_explicit = estimate_coordinate_mie_entropy_with_metrics_and_constant(
+        data,
+        n_frames,
+        &metrics,
+        default_constant,
+    )
+    .unwrap();
+    assert_eq!(mie_default, mie_explicit);
+}
