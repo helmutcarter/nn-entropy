@@ -111,6 +111,22 @@ Threading note:
 cargo test --release
 ```
 
+The suite is split by concern:
+
+| File | Covers |
+|---|---|
+| `tests/common/mod.rs` | Shared helpers: a self-contained RNG, closed-form entropies, an O(N^2) nearest-neighbor reference. Calls none of the code it checks. |
+| `tests/analytic.rs` | Closed-form ground truth: uniform, normal, exponential, circular uniform, bivariate-normal joint entropy and mutual information, plus a convergence check. |
+| `tests/reference.rs` | Brute-force cross-checks of the kd-tree search for 1-4 dimensions and every metric combination, and of the MIE expansion against an independent inclusion-exclusion evaluation. |
+| `tests/invariance.rs` | Translation, reflection, relabeling, frame reordering, scaling equivariance, periodic rotation, and floating-point behavior. |
+| `tests/geometry.rs` | Bonds, angles and torsions from constructed configurations; the torsion sign convention; the end-to-end BAT path on the fixture. |
+| `tests/validation.rs` | The input-validation contract: which inputs are refused and what each error says. |
+| `tests/testing.rs`, `tests/entropy.rs`, `tests/cli.rs` | Unit tests, fixture regressions, and CLI behavior. |
+
+Expected values in `analytic.rs`, `reference.rs`, `invariance.rs` and `geometry.rs`
+are derived from theory or from an independent reference, never recorded from a
+previous run, per the requirements in `REVIEW.md`.
+
 The Rust suite does not link the Python extension, so the bindings have a
 separate smoke test that runs against a built wheel:
 
