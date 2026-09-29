@@ -14,8 +14,7 @@ mod common;
 
 use common::Rng;
 use nn_entropy::{
-    CoordinateMetric, calculate_entropy_from_data_with_metrics,
-    estimate_coordinate_mutual_information_with_metrics,
+    CoordinateMetric, EntropyOptions, calculate_entropy, estimate_coordinate_mutual_information,
 };
 
 const PERIOD: f64 = std::f64::consts::TAU;
@@ -34,7 +33,16 @@ fn sample(seed: u64) -> Vec<Vec<f64>> {
 }
 
 fn entropy(data: Vec<Vec<f64>>, order: usize, metrics: &[CoordinateMetric]) -> f64 {
-    calculate_entropy_from_data_with_metrics(data, FRAMES, order, metrics).unwrap()
+    calculate_entropy(
+        &data,
+        FRAMES,
+        order,
+        &EntropyOptions {
+            metrics: Some(metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 fn assert_close(actual: f64, expected: f64, tolerance: f64, what: &str) {
@@ -230,18 +238,24 @@ fn mutual_information_is_exactly_invariant_under_a_common_rescaling() {
     let (x, y) = rng.correlated_normal_pair(FRAMES, 0.7);
     let metrics = linear(2);
 
-    let base = estimate_coordinate_mutual_information_with_metrics(
-        vec![x.clone(), y.clone()],
+    let base = estimate_coordinate_mutual_information(
+        &[x.clone(), y.clone()],
         FRAMES,
-        &metrics,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
     )
     .unwrap();
     let mapped_x: Vec<f64> = x.iter().map(|v| 4.0 * v - 12.0).collect();
     let mapped_y: Vec<f64> = y.iter().map(|v| -4.0 * v + 3.0).collect();
-    let mapped = estimate_coordinate_mutual_information_with_metrics(
-        vec![mapped_x, mapped_y],
+    let mapped = estimate_coordinate_mutual_information(
+        &[mapped_x, mapped_y],
         FRAMES,
-        &metrics,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -269,18 +283,24 @@ fn mutual_information_is_approximately_invariant_under_unequal_rescaling() {
     let (x, y) = rng.correlated_normal_pair(FRAMES, 0.7);
     let metrics = linear(2);
 
-    let base = estimate_coordinate_mutual_information_with_metrics(
-        vec![x.clone(), y.clone()],
+    let base = estimate_coordinate_mutual_information(
+        &[x.clone(), y.clone()],
         FRAMES,
-        &metrics,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
     )
     .unwrap();
     let mapped_x: Vec<f64> = x.iter().map(|v| 4.0 * v - 12.0).collect();
     let mapped_y: Vec<f64> = y.iter().map(|v| -0.25 * v + 3.0).collect();
-    let mapped = estimate_coordinate_mutual_information_with_metrics(
-        vec![mapped_x, mapped_y],
+    let mapped = estimate_coordinate_mutual_information(
+        &[mapped_x, mapped_y],
         FRAMES,
-        &metrics,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -307,14 +327,32 @@ fn periodic_entropy_is_invariant_under_rotation() {
         .collect();
     let metrics = vec![CoordinateMetric::Periodic { period: PERIOD }; 3];
 
-    let base = calculate_entropy_from_data_with_metrics(data.clone(), FRAMES, 2, &metrics).unwrap();
+    let base = calculate_entropy(
+        &data,
+        FRAMES,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     for rotation in [0.3_f64, 1.9, -2.7, PERIOD / 2.0] {
         let rotated: Vec<Vec<f64>> = data
             .iter()
             .map(|coordinate| coordinate.iter().map(|v| v + rotation).collect())
             .collect();
-        let moved = calculate_entropy_from_data_with_metrics(rotated, FRAMES, 2, &metrics).unwrap();
+        let moved = calculate_entropy(
+            &rotated,
+            FRAMES,
+            2,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_close(moved, base, 1e-9, &format!("rotation by {rotation}"));
     }
 }
@@ -328,14 +366,32 @@ fn periodic_entropy_is_invariant_under_whole_period_shifts() {
         .collect();
     let metrics = vec![CoordinateMetric::Periodic { period: PERIOD }; 3];
 
-    let base = calculate_entropy_from_data_with_metrics(data.clone(), FRAMES, 2, &metrics).unwrap();
+    let base = calculate_entropy(
+        &data,
+        FRAMES,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     for multiple in [1.0_f64, -1.0, 5.0] {
         let shifted: Vec<Vec<f64>> = data
             .iter()
             .map(|coordinate| coordinate.iter().map(|v| v + multiple * PERIOD).collect())
             .collect();
-        let moved = calculate_entropy_from_data_with_metrics(shifted, FRAMES, 2, &metrics).unwrap();
+        let moved = calculate_entropy(
+            &shifted,
+            FRAMES,
+            2,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_close(moved, base, 1e-9, &format!("shift by {multiple} periods"));
     }
 }
@@ -420,7 +476,16 @@ fn repeated_frames_do_not_produce_infinite_entropy() {
     let frames = data[0].len();
     let metrics = linear(3);
 
-    let value = calculate_entropy_from_data_with_metrics(data, frames, 2, &metrics).unwrap();
+    let value = calculate_entropy(
+        &data,
+        frames,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(
         value.is_finite(),
         "duplicated frames produced a non-finite entropy: {value}"

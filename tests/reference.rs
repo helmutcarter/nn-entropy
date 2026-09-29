@@ -11,11 +11,7 @@ use common::{
     Rng, brute_force_joint_entropy, brute_force_log_nn_sum, choose, combinations,
     kl_constant_asymptotic,
 };
-use nn_entropy::{
-    CoordinateMetric, calc_four_d_nn_with_metrics, calc_one_d_nn_with_metric,
-    calc_three_d_nn_with_metrics, calc_two_d_nn_with_metrics,
-    calculate_entropy_from_data_with_metrics,
-};
+use nn_entropy::{CoordinateMetric, EntropyOptions, calc_joint_nn, calculate_entropy};
 
 const PERIOD: f64 = std::f64::consts::TAU;
 
@@ -36,7 +32,7 @@ fn periodic(n: usize) -> Vec<CoordinateMetric> {
 ///
 /// Every joint entropy `S_A` comes from the brute-force reference, and the
 /// binomial weights are recomputed here, so this shares nothing with the
-/// coefficients baked into `calculate_entropy_from_data_with_metrics`.
+/// coefficients baked into `calculate_entropy`.
 fn mie_expansion_reference(data: &[Vec<f64>], metrics: &[CoordinateMetric], order: usize) -> f64 {
     let n = data.len();
     assert!(
@@ -90,7 +86,7 @@ fn one_d_nn_matches_brute_force_for_both_metrics() {
     let points = rng.uniform_vec(200, -std::f64::consts::PI, std::f64::consts::PI);
 
     for metrics in [linear(1), periodic(1)] {
-        let actual = calc_one_d_nn_with_metric(&points, metrics[0]).unwrap();
+        let actual = calc_joint_nn([&points], [metrics[0]]).unwrap();
         let expected = brute_force_log_nn_sum(&[points.as_slice()], &metrics);
         assert_close(actual, expected, 1e-9, "1D nearest neighbor");
     }
@@ -117,7 +113,7 @@ fn two_d_nn_matches_brute_force_for_every_metric_combination() {
             CoordinateMetric::Periodic { period: PERIOD },
         ],
     ] {
-        let actual = calc_two_d_nn_with_metrics(&a, &b, metrics).unwrap();
+        let actual = calc_joint_nn([&a, &b], metrics).unwrap();
         let expected = brute_force_log_nn_sum(&[a.as_slice(), b.as_slice()], &metrics);
         assert_close(actual, expected, 1e-9, &format!("2D {metrics:?}"));
     }
@@ -135,7 +131,7 @@ fn three_d_nn_matches_brute_force_with_mixed_metrics() {
         CoordinateMetric::Periodic { period: PERIOD },
     ];
 
-    let actual = calc_three_d_nn_with_metrics(&a, &b, &c, metrics).unwrap();
+    let actual = calc_joint_nn([&a, &b, &c], metrics).unwrap();
     let expected = brute_force_log_nn_sum(&[a.as_slice(), b.as_slice(), c.as_slice()], &metrics);
     assert_close(actual, expected, 1e-9, "3D mixed metrics");
 }
@@ -154,7 +150,7 @@ fn four_d_nn_matches_brute_force_with_mixed_metrics() {
         CoordinateMetric::Linear,
     ];
 
-    let actual = calc_four_d_nn_with_metrics(&a, &b, &c, &d, metrics).unwrap();
+    let actual = calc_joint_nn([&a, &b, &c, &d], metrics).unwrap();
     let expected = brute_force_log_nn_sum(
         &[a.as_slice(), b.as_slice(), c.as_slice(), d.as_slice()],
         &metrics,
@@ -180,7 +176,7 @@ fn nn_search_matches_brute_force_when_samples_are_duplicated() {
     }
 
     let metrics = linear(2);
-    let actual = calc_two_d_nn_with_metrics(&a, &b, [metrics[0], metrics[1]]).unwrap();
+    let actual = calc_joint_nn([&a, &b], [metrics[0], metrics[1]]).unwrap();
     let expected = brute_force_log_nn_sum(&[a.as_slice(), b.as_slice()], &metrics);
     assert_close(actual, expected, 1e-9, "2D with duplicate samples");
 }
@@ -195,12 +191,12 @@ fn periodic_nn_matches_brute_force_when_samples_straddle_the_branch_cut() {
     points.extend(rng.uniform_vec(80, -std::f64::consts::PI, -std::f64::consts::PI + 0.05));
 
     let metric = CoordinateMetric::Periodic { period: PERIOD };
-    let actual = calc_one_d_nn_with_metric(&points, metric).unwrap();
+    let actual = calc_joint_nn([&points], [metric]).unwrap();
     let expected = brute_force_log_nn_sum(&[points.as_slice()], &[metric]);
     assert_close(actual, expected, 1e-9, "periodic branch cut");
 
     // And the wrapped result must be strictly tighter than the linear one.
-    let linear_result = calc_one_d_nn_with_metric(&points, CoordinateMetric::Linear).unwrap();
+    let linear_result = calc_joint_nn([&points], [CoordinateMetric::Linear]).unwrap();
     assert!(
         actual < linear_result,
         "wrapping should shorten distances: periodic {actual} vs linear {linear_result}"
@@ -221,7 +217,16 @@ fn first_order_entropy_matches_sum_of_marginals() {
         .iter()
         .map(|c| brute_force_joint_entropy(&[c.as_slice()], &[CoordinateMetric::Linear]))
         .sum();
-    let actual = calculate_entropy_from_data_with_metrics(data, n_frames, 1, &metrics).unwrap();
+    let actual = calculate_entropy(
+        &data,
+        n_frames,
+        1,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_close(actual, expected, 1e-9, "order 1");
     let _ = kl_constant_asymptotic(n_frames, 1);
 }
@@ -235,7 +240,16 @@ fn second_order_expansion_matches_inclusion_exclusion_reference() {
     let n_frames = data[0].len();
 
     let expected = mie_expansion_reference(&data, &metrics, 2);
-    let actual = calculate_entropy_from_data_with_metrics(data, n_frames, 2, &metrics).unwrap();
+    let actual = calculate_entropy(
+        &data,
+        n_frames,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_close(actual, expected, 1e-8, "order 2 expansion");
 }
 
@@ -248,7 +262,16 @@ fn third_order_expansion_matches_inclusion_exclusion_reference() {
     let n_frames = data[0].len();
 
     let expected = mie_expansion_reference(&data, &metrics, 3);
-    let actual = calculate_entropy_from_data_with_metrics(data, n_frames, 3, &metrics).unwrap();
+    let actual = calculate_entropy(
+        &data,
+        n_frames,
+        3,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_close(actual, expected, 1e-8, "order 3 expansion");
 }
 
@@ -261,7 +284,16 @@ fn fourth_order_expansion_matches_inclusion_exclusion_reference() {
     let n_frames = data[0].len();
 
     let expected = mie_expansion_reference(&data, &metrics, 4);
-    let actual = calculate_entropy_from_data_with_metrics(data, n_frames, 4, &metrics).unwrap();
+    let actual = calculate_entropy(
+        &data,
+        n_frames,
+        4,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_close(actual, expected, 1e-8, "order 4 expansion");
 }
 
@@ -275,9 +307,16 @@ fn expansion_coefficients_hold_for_a_seventh_coordinate() {
 
     for order in 2..=4 {
         let expected = mie_expansion_reference(&data, &metrics, order);
-        let actual =
-            calculate_entropy_from_data_with_metrics(data.clone(), n_frames, order, &metrics)
-                .unwrap();
+        let actual = calculate_entropy(
+            &data,
+            n_frames,
+            order,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_close(actual, expected, 1e-8, &format!("order {order} at n = 7"));
     }
 }
@@ -293,9 +332,16 @@ fn expansion_coefficients_hold_under_periodic_metrics() {
 
     for order in 2..=4 {
         let expected = mie_expansion_reference(&data, &metrics, order);
-        let actual =
-            calculate_entropy_from_data_with_metrics(data.clone(), n_frames, order, &metrics)
-                .unwrap();
+        let actual = calculate_entropy(
+            &data,
+            n_frames,
+            order,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_close(actual, expected, 1e-8, &format!("periodic order {order}"));
     }
 }
@@ -318,9 +364,16 @@ fn expansion_coefficients_hold_under_mixed_metrics() {
 
     for order in 2..=4 {
         let expected = mie_expansion_reference(&data, &metrics, order);
-        let actual =
-            calculate_entropy_from_data_with_metrics(data.clone(), n_frames, order, &metrics)
-                .unwrap();
+        let actual = calculate_entropy(
+            &data,
+            n_frames,
+            order,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_close(actual, expected, 1e-8, &format!("mixed order {order}"));
     }
 }

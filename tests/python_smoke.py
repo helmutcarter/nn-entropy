@@ -27,9 +27,13 @@ EXPECTED_EXPORTS = {
     "System",
     "load_system",
     "estimate_entropy",
-    "estimate_mie_entropy",
     "estimate_coordinate_entropy",
     "estimate_coordinate_mutual_information",
+}
+
+
+REMOVED_EXPORTS = {
+    "estimate_mie_entropy",
     "estimate_coordinate_mie_entropy",
     "estimate_mie_entropy_from_files",
     "estimate_coordinate_entropy_from_files",
@@ -42,6 +46,9 @@ def check_exports():
     missing = EXPECTED_EXPORTS - set(dir(nn_entropy))
     if missing:
         raise AssertionError(f"module is missing exports: {sorted(missing)}")
+    stale = REMOVED_EXPORTS & set(dir(nn_entropy))
+    if stale:
+        raise AssertionError(f"module still exports removed names: {sorted(stale)}")
     print(f"exports: all {len(EXPECTED_EXPORTS)} entry points present")
 
 
@@ -59,11 +66,27 @@ def check_closed_form_entropy():
     print(f"order-1 closed form: {got!r}")
 
 
+def check_exact_constant_closed_form():
+    """Same input as above with the exact finite-sample term psi(N) - psi(1).
+
+    For N = 2 that term is H_1 = 1, so the estimate is ln(2) + 1.
+    """
+    data = np.array([[0.0, 1.0]])
+    got = nn_entropy.estimate_entropy(data, mie_order=1, exact_constant=True)
+    want = math.log(2.0) + 1.0
+    assert abs(got - want) < 1e-12, f"exact constant: got {got!r}, want {want!r}"
+    per_coordinate = nn_entropy.estimate_coordinate_entropy(
+        data, mie_order=1, exact_constant=True
+    )
+    assert abs(per_coordinate[0] - want) < 1e-12, per_coordinate
+    print(f"order-1 exact closed form: {got!r}")
+
+
 def check_coordinate_entropies_sum_to_total():
     """The order-1 total is by definition the sum of the per-coordinate values."""
     rng = np.random.default_rng(0)
     data = rng.normal(size=(4, 64))
-    per_coordinate = nn_entropy.estimate_coordinate_entropy(data)
+    per_coordinate = nn_entropy.estimate_coordinate_entropy(data, mie_order=1)
     total = nn_entropy.estimate_entropy(data, mie_order=1)
     assert len(per_coordinate) == 4, per_coordinate
     assert abs(sum(per_coordinate) - total) < 1e-9, (sum(per_coordinate), total)
@@ -72,11 +95,13 @@ def check_coordinate_entropies_sum_to_total():
 
 def check_mie_entropy_sums_to_second_order_total():
     """Splitting each pairwise mutual information evenly is an algebraic
-    identity, so the per-coordinate MIE values must sum to the order-2 total."""
+    identity, so the per-coordinate values at the default order (2) must sum to
+    the default-order total."""
     rng = np.random.default_rng(1)
     data = rng.normal(size=(4, 64))
-    per_coordinate = nn_entropy.estimate_coordinate_mie_entropy(data)
-    total = nn_entropy.estimate_entropy(data, mie_order=2)
+    per_coordinate = nn_entropy.estimate_coordinate_entropy(data)
+    total = nn_entropy.estimate_entropy(data)
+    assert abs(total - nn_entropy.estimate_entropy(data, mie_order=2)) < 1e-12
     assert abs(sum(per_coordinate) - total) < 1e-9, (sum(per_coordinate), total)
     print(f"order-2 additivity: {total!r}")
 
@@ -117,6 +142,7 @@ def main():
     for check in (
         check_exports,
         check_closed_form_entropy,
+        check_exact_constant_closed_form,
         check_coordinate_entropies_sum_to_total,
         check_mie_entropy_sums_to_second_order_total,
         check_translation_invariance,

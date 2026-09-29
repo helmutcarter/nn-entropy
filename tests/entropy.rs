@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use nn_entropy::bat_library::InternalCoordinates;
 use nn_entropy::{
-    CoordinateMetric, calculate_entropy_from_data_with_metrics,
-    estimate_coordinate_entropy_with_metrics,
+    CoordinateMetric, EntropyOptions, calculate_entropy, estimate_coordinate_entropy,
 };
 
 fn test_data_path(rel: &str) -> PathBuf {
@@ -38,8 +37,16 @@ fn one_d_data_from_fixture(torsions_only: bool) -> (Vec<Vec<f64>>, usize, Vec<Co
 #[test]
 fn first_order_entropy_matches_periodic_fixture_regression() {
     let (one_d_data, frame_count, metrics) = one_d_data_from_fixture(false);
-    let entropy = calculate_entropy_from_data_with_metrics(one_d_data, frame_count, 1, &metrics)
-        .expect("first-order entropy calculation failed");
+    let entropy = calculate_entropy(
+        &one_d_data,
+        frame_count,
+        1,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .expect("first-order entropy calculation failed");
     let expected = -43.2442783659548_f64;
     let diff = (entropy - expected).abs();
     assert!(
@@ -51,8 +58,16 @@ fn first_order_entropy_matches_periodic_fixture_regression() {
 #[test]
 fn coordinate_first_order_entropy_sums_to_fixture_total() {
     let (one_d_data, frame_count, metrics) = one_d_data_from_fixture(false);
-    let entropies = estimate_coordinate_entropy_with_metrics(one_d_data, frame_count, &metrics)
-        .expect("coordinate entropy calculation failed");
+    let entropies = estimate_coordinate_entropy(
+        &one_d_data,
+        frame_count,
+        1,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .expect("coordinate entropy calculation failed");
     assert_eq!(entropies.len(), metrics.len());
     let sum: f64 = entropies.iter().sum();
     assert!((sum - (-43.2442783659548)).abs() < 1e-9);
@@ -61,8 +76,16 @@ fn coordinate_first_order_entropy_sums_to_fixture_total() {
 #[test]
 fn second_order_entropy_matches_periodic_fixture_regression() {
     let (one_d_data, frame_count, metrics) = one_d_data_from_fixture(false);
-    let entropy = calculate_entropy_from_data_with_metrics(one_d_data, frame_count, 2, &metrics)
-        .expect("second-order entropy calculation failed");
+    let entropy = calculate_entropy(
+        &one_d_data,
+        frame_count,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .expect("second-order entropy calculation failed");
     let expected = -130.49745250649198_f64;
     let diff = (entropy - expected).abs();
     assert!(
@@ -74,8 +97,16 @@ fn second_order_entropy_matches_periodic_fixture_regression() {
 #[test]
 fn default_entropy_matches_second_order_reference_for_test_fixture() {
     let (one_d_data, frame_count, metrics) = one_d_data_from_fixture(false);
-    let entropy = calculate_entropy_from_data_with_metrics(one_d_data, frame_count, 2, &metrics)
-        .expect("entropy calculation failed");
+    let entropy = calculate_entropy(
+        &one_d_data,
+        frame_count,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .expect("entropy calculation failed");
     let expected = -130.49745250649198_f64;
     let diff = (entropy - expected).abs();
     assert!(
@@ -87,8 +118,16 @@ fn default_entropy_matches_second_order_reference_for_test_fixture() {
 #[test]
 fn torsions_only_entropy_matches_reference_for_test_fixture() {
     let (one_d_data, frame_count, metrics) = one_d_data_from_fixture(true);
-    let entropy = calculate_entropy_from_data_with_metrics(one_d_data, frame_count, 2, &metrics)
-        .expect("entropy calculation failed");
+    let entropy = calculate_entropy(
+        &one_d_data,
+        frame_count,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .expect("entropy calculation failed");
     let expected = -10.524094445327933_f64;
     let diff = (entropy - expected).abs();
     assert!(

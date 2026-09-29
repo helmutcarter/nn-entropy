@@ -167,7 +167,7 @@ fn axis_separation(a: f64, b: f64, metric: CoordinateMetric) -> f64 {
     }
 }
 
-/// Brute-force O(N^2) equivalent of `calc_joint_nn_with_metrics`: the sum over
+/// Brute-force O(N^2) equivalent of `calc_joint_nn`: the sum over
 /// samples of `ln` of the distance to the nearest *distinct* point.
 ///
 /// Matching the crate's documented tie handling, a sample that coincides

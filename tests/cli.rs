@@ -2,10 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{
-    CoordinateMetric, FiniteSampleConstant, calculate_entropy_from_data_with_metrics_and_constant,
-    calculate_entropy_from_data_with_order,
-};
+use nn_entropy::{CoordinateMetric, EntropyOptions, FiniteSampleConstant, calculate_entropy};
 
 fn fixture(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -50,7 +47,7 @@ fn no_periodic_matches_linear_raw_array_estimator() {
             data[dimension].push(value);
         }
     }
-    let expected = calculate_entropy_from_data_with_order(data, frames, 2).unwrap();
+    let expected = calculate_entropy(&data, frames, 2, &EntropyOptions::default()).unwrap();
     assert!((cli_entropy - expected).abs() < 1e-12);
 }
 
@@ -102,12 +99,14 @@ fn exact_constant_flag_selects_exact_finite_sample_term() {
         }
     }
     let metrics = vec![CoordinateMetric::Linear; dimensions];
-    let expected = calculate_entropy_from_data_with_metrics_and_constant(
-        data,
+    let expected = calculate_entropy(
+        &data,
         frames,
         2,
-        &metrics,
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .unwrap();
     assert!((parse_entropy(&output.stdout) - expected).abs() < 1e-12);

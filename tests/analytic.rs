@@ -19,8 +19,7 @@ use common::{
     normal_entropy, uniform_entropy,
 };
 use nn_entropy::{
-    CoordinateMetric, calculate_entropy_from_data_with_metrics,
-    estimate_coordinate_mutual_information_with_metrics,
+    CoordinateMetric, EntropyOptions, calculate_entropy, estimate_coordinate_mutual_information,
 };
 
 const REPLICATES: usize = 5;
@@ -59,7 +58,16 @@ fn check(label: &str, estimated: f64, exact: f64, spread: f64, tolerance: f64) {
 fn entropy_of(data: Vec<Vec<f64>>, order: usize) -> f64 {
     let frames = data[0].len();
     let metrics = linear(data.len());
-    calculate_entropy_from_data_with_metrics(data, frames, order, &metrics).unwrap()
+    calculate_entropy(
+        &data,
+        frames,
+        order,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +137,16 @@ fn circular_uniform_entropy_matches_log_period() {
         let mut rng = Rng::new(seed);
         let data = vec![rng.uniform_vec(8000, -std::f64::consts::PI, std::f64::consts::PI)];
         let metrics = vec![CoordinateMetric::Periodic { period }];
-        calculate_entropy_from_data_with_metrics(data, 8000, 1, &metrics).unwrap()
+        calculate_entropy(
+            &data,
+            8000,
+            1,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap()
     });
     check(
         "circular uniform(period tau)",
@@ -195,9 +212,15 @@ fn bivariate_normal_mutual_information_matches_closed_form() {
             let mut rng = Rng::new(seed);
             let (x, y) = rng.correlated_normal_pair(6000, rho);
             let metrics = linear(2);
-            let mi =
-                estimate_coordinate_mutual_information_with_metrics(vec![x, y], 6000, &metrics)
-                    .unwrap();
+            let mi = estimate_coordinate_mutual_information(
+                &[x, y],
+                6000,
+                &EntropyOptions {
+                    metrics: Some(&metrics),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             assert_eq!(mi.len(), 1);
             mi[0]
         });
@@ -228,7 +251,15 @@ fn mutual_information_vanishes_for_independent_coordinates() {
         let mut rng = Rng::new(2000 + replicate as u64);
         let data: Vec<Vec<f64>> = (0..4).map(|_| rng.normal_vec(4000, 0.0, 1.0)).collect();
         let metrics = linear(4);
-        let mi = estimate_coordinate_mutual_information_with_metrics(data, 4000, &metrics).unwrap();
+        let mi = estimate_coordinate_mutual_information(
+            &data,
+            4000,
+            &EntropyOptions {
+                metrics: Some(&metrics),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(mi.len(), PAIRS);
         for (pair, value) in mi.iter().enumerate() {
             assert!(

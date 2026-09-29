@@ -17,9 +17,10 @@ pub enum CoordinateMetric {
 }
 
 /// Sample-size term used in the Kozachenko-Leonenko entropy constant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FiniteSampleConstant {
     /// Historical Python-compatible large-sample approximation: ln(N) + gamma.
+    #[default]
     PythonCompatibleAsymptotic,
     /// Exact k=1 finite-sample term: psi(N) - psi(1) = H_(N-1).
     Exact,
@@ -143,56 +144,54 @@ fn combination_from_rank<const K: usize>(mut rank: usize, n: usize) -> [usize; K
     combination
 }
 
-pub fn calculate_entropy_from_data(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-) -> Result<f64, String> {
-    calculate_entropy_from_data_with_order(one_d_data, frames_end, 2)
+/// Optional settings shared by every entropy estimator.
+///
+/// `EntropyOptions::default()` treats every coordinate as linear and uses the
+/// historical Python-compatible finite-sample constant.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EntropyOptions<'a> {
+    /// Per-coordinate metrics; `None` treats every coordinate as linear.
+    pub metrics: Option<&'a [CoordinateMetric]>,
+    pub constant: FiniteSampleConstant,
 }
 
-pub fn calculate_entropy_from_data_with_order(
-    one_d_data: Vec<Vec<f64>>,
+/// Validates the input and returns the data truncated to `frames_end` together
+/// with one metric per coordinate.
+fn resolve_input(
+    one_d_data: &[Vec<f64>],
     frames_end: usize,
-    mie_order: usize,
-) -> Result<f64, String> {
-    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
-    calculate_entropy_from_data_with_metrics(one_d_data, frames_end, mie_order, &metrics)
+    options: &EntropyOptions,
+) -> Result<(Vec<Vec<f64>>, Vec<CoordinateMetric>), String> {
+    validate_one_d_data(one_d_data, frames_end)?;
+    let metrics = match options.metrics {
+        Some(metrics) => {
+            validate_metrics(metrics, one_d_data.len())?;
+            metrics.to_vec()
+        }
+        None => vec![CoordinateMetric::Linear; one_d_data.len()],
+    };
+    let one_d_data = one_d_data
+        .iter()
+        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
+        .collect();
+    Ok((one_d_data, metrics))
 }
 
-pub fn calculate_entropy_from_data_with_metrics(
-    one_d_data: Vec<Vec<f64>>,
+/// Total entropy from a mutual information expansion truncated at `mie_order`
+/// (1 through 4). Order 1 is the sum of the marginal entropies.
+pub fn calculate_entropy(
+    one_d_data: &[Vec<f64>],
     frames_end: usize,
     mie_order: usize,
-    metrics: &[CoordinateMetric],
-) -> Result<f64, String> {
-    calculate_entropy_from_data_with_metrics_and_constant(
-        one_d_data,
-        frames_end,
-        mie_order,
-        metrics,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
-    )
-}
-
-pub fn calculate_entropy_from_data_with_metrics_and_constant(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    mie_order: usize,
-    metrics: &[CoordinateMetric],
-    constant: FiniteSampleConstant,
+    options: &EntropyOptions,
 ) -> Result<f64, String> {
     if !(1..=4).contains(&mie_order) {
         return Err(format!(
             "unsupported MIE order {mie_order}; supported orders are 1, 2, 3, and 4"
         ));
     }
-    validate_one_d_data(&one_d_data, frames_end)?;
-    validate_metrics(metrics, one_d_data.len())?;
-
-    let one_d_data = one_d_data
-        .into_iter()
-        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
-        .collect::<Vec<_>>();
+    let (one_d_data, metrics) = resolve_input(one_d_data, frames_end, options)?;
+    let constant = options.constant;
 
     let n_frames = one_d_data[0].len();
     let degrees_freedom = one_d_data.len();
@@ -206,7 +205,7 @@ pub fn calculate_entropy_from_data_with_metrics_and_constant(
         .zip(metrics.par_iter())
         .try_fold(
             || 0.0,
-            |acc, (ic, metric)| Ok::<f64, String>(acc + calc_one_d_nn_with_metric(ic, *metric)?),
+            |acc, (ic, metric)| Ok::<f64, String>(acc + calc_joint_nn([ic], [*metric])?),
         )
         .try_reduce(|| 0.0, |a, b| Ok::<f64, String>(a + b))?;
 
@@ -230,9 +229,8 @@ pub fn calculate_entropy_from_data_with_metrics_and_constant(
             |acc, rank| {
                 let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_two_d_nn_with_metrics(
-                        &one_d_data[i],
-                        &one_d_data[j],
+                    acc + calc_joint_nn(
+                        [&one_d_data[i], &one_d_data[j]],
                         [metrics[i], metrics[j]],
                     )?,
                 )
@@ -259,10 +257,8 @@ pub fn calculate_entropy_from_data_with_metrics_and_constant(
             |acc, rank| {
                 let [i, j, k] = combination_from_rank::<3>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_three_d_nn_with_metrics(
-                        &one_d_data[i],
-                        &one_d_data[j],
-                        &one_d_data[k],
+                    acc + calc_joint_nn(
+                        [&one_d_data[i], &one_d_data[j], &one_d_data[k]],
                         [metrics[i], metrics[j], metrics[k]],
                     )?,
                 )
@@ -294,11 +290,13 @@ pub fn calculate_entropy_from_data_with_metrics_and_constant(
             |acc, rank| {
                 let [i, j, k, l] = combination_from_rank::<4>(rank, degrees_freedom);
                 Ok::<f64, String>(
-                    acc + calc_four_d_nn_with_metrics(
-                        &one_d_data[i],
-                        &one_d_data[j],
-                        &one_d_data[k],
-                        &one_d_data[l],
+                    acc + calc_joint_nn(
+                        [
+                            &one_d_data[i],
+                            &one_d_data[j],
+                            &one_d_data[k],
+                            &one_d_data[l],
+                        ],
                         [metrics[i], metrics[j], metrics[k], metrics[l]],
                     )?,
                 )
@@ -323,180 +321,35 @@ pub fn calculate_entropy_from_data_with_metrics_and_constant(
     )
 }
 
-pub fn estimate_coordinate_entropy_rust(
-    one_d_data: Vec<Vec<f64>>,
+/// Each coordinate's share of the MIE entropy truncated at `mie_order` (1 or 2),
+/// so the values sum to `calculate_entropy` at the same order.
+///
+/// Order 1 gives the marginal entropies. Order 2 also splits every pairwise
+/// mutual information term evenly between its two coordinates.
+pub fn estimate_coordinate_entropy(
+    one_d_data: &[Vec<f64>],
     frames_end: usize,
+    mie_order: usize,
+    options: &EntropyOptions,
 ) -> Result<Vec<f64>, String> {
-    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
-    estimate_coordinate_entropy_with_metrics(one_d_data, frames_end, &metrics)
-}
-
-pub fn estimate_coordinate_entropy_with_metrics(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-) -> Result<Vec<f64>, String> {
-    estimate_coordinate_entropy_with_metrics_and_constant(
-        one_d_data,
-        frames_end,
-        metrics,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
-    )
-}
-
-pub fn estimate_coordinate_entropy_with_metrics_and_constant(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-    constant: FiniteSampleConstant,
-) -> Result<Vec<f64>, String> {
-    validate_one_d_data(&one_d_data, frames_end)?;
-    validate_metrics(metrics, one_d_data.len())?;
-
-    let one_d_data = one_d_data
-        .into_iter()
-        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
-        .collect::<Vec<_>>();
-
-    let n_frames: usize = one_d_data[0].len();
-
-    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
-
-    let one_d_distances: Vec<f64> = one_d_data
-        .par_iter()
-        .zip(metrics.par_iter())
-        .map(|(ic, metric)| calc_one_d_nn_with_metric(ic, *metric))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let one_d_entropies: Vec<f64> = one_d_distances
-        .iter()
-        .map(|&distance| {
-            estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
-        })
-        .collect();
-
-    Ok(one_d_entropies)
-}
-
-pub fn estimate_coordinate_mutual_information_rust(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-) -> Result<Vec<f64>, String> {
-    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
-    estimate_coordinate_mutual_information_with_metrics(one_d_data, frames_end, &metrics)
-}
-
-pub fn estimate_coordinate_mutual_information_with_metrics(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-) -> Result<Vec<f64>, String> {
-    estimate_coordinate_mutual_information_with_metrics_and_constant(
-        one_d_data,
-        frames_end,
-        metrics,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
-    )
-}
-
-pub fn estimate_coordinate_mutual_information_with_metrics_and_constant(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-    constant: FiniteSampleConstant,
-) -> Result<Vec<f64>, String> {
-    validate_one_d_data(&one_d_data, frames_end)?;
-    validate_metrics(metrics, one_d_data.len())?;
-
-    let one_d_data = one_d_data
-        .into_iter()
-        .map(|internal_coordinate| internal_coordinate[..frames_end].to_vec())
-        .collect::<Vec<_>>();
-
-    let n_frames: usize = one_d_data[0].len();
-    let degrees_freedom: usize = one_d_data.len();
-
-    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
-    let two_d_constant = entropy_constant_with_convention(n_frames, 2, constant)?;
-
-    let one_d_entropies = one_d_data
-        .par_iter()
-        .zip(metrics.par_iter())
-        .map(|(ic, metric)| {
-            calc_one_d_nn_with_metric(ic, *metric).map(|distance| {
-                estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let two_d_degrees_freedom = binomial(degrees_freedom, 2);
-
-    let mutual_information: Vec<f64> = (0..two_d_degrees_freedom)
-        .into_par_iter()
-        .map(|rank| {
-            let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
-            let joint_entropy = estimate_entropy_efficient(
-                calc_two_d_nn_with_metrics(
-                    &one_d_data[i],
-                    &one_d_data[j],
-                    [metrics[i], metrics[j]],
-                )? * 2.0,
-                (n_frames as f64).recip(),
-                two_d_constant,
-            );
-            Ok::<f64, String>(one_d_entropies[i] + one_d_entropies[j] - joint_entropy)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    assert_eq!(mutual_information.len(), two_d_degrees_freedom); // Just to be safe
-    Ok(mutual_information)
-}
-
-pub fn estimate_coordinate_mie_entropy_rust(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-) -> Result<Vec<f64>, String> {
-    let metrics = vec![CoordinateMetric::Linear; one_d_data.len()];
-    estimate_coordinate_mie_entropy_with_metrics(one_d_data, frames_end, &metrics)
-}
-
-pub fn estimate_coordinate_mie_entropy_with_metrics(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-) -> Result<Vec<f64>, String> {
-    estimate_coordinate_mie_entropy_with_metrics_and_constant(
-        one_d_data,
-        frames_end,
-        metrics,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
-    )
-}
-
-pub fn estimate_coordinate_mie_entropy_with_metrics_and_constant(
-    one_d_data: Vec<Vec<f64>>,
-    frames_end: usize,
-    metrics: &[CoordinateMetric],
-    constant: FiniteSampleConstant,
-) -> Result<Vec<f64>, String> {
-    validate_one_d_data(&one_d_data, frames_end)?;
-    validate_metrics(metrics, one_d_data.len())?;
-
-    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
-        one_d_data.clone(),
-        frames_end,
-        metrics,
-        constant,
-    )?;
+    if !(1..=2).contains(&mie_order) {
+        return Err(format!(
+            "unsupported per-coordinate MIE order {mie_order}; supported orders are 1 and 2"
+        ));
+    }
+    let (one_d_data, metrics) = resolve_input(one_d_data, frames_end, options)?;
+    let coordinate_entropies = coordinate_entropy_impl(&one_d_data, &metrics, options.constant)?;
     let degrees_freedom = coordinate_entropies.len();
-    if degrees_freedom == 1 {
+    if mie_order == 1 || degrees_freedom == 1 {
         return Ok(coordinate_entropies);
     }
 
-    let pairwise_mutual_information =
-        estimate_coordinate_mutual_information_with_metrics_and_constant(
-            one_d_data, frames_end, metrics, constant,
-        )?;
+    let pairwise_mutual_information = coordinate_mutual_information_impl(
+        &one_d_data,
+        &metrics,
+        options.constant,
+        &coordinate_entropies,
+    )?;
     let mut coordinate_mie_entropy = coordinate_entropies;
     let mut pair_idx = 0;
     for i in 0..degrees_freedom {
@@ -511,74 +364,62 @@ pub fn estimate_coordinate_mie_entropy_with_metrics_and_constant(
     Ok(coordinate_mie_entropy)
 }
 
-pub fn calc_one_d_nn(points: &[f64]) -> Result<f64, String> {
-    calc_one_d_nn_with_metric(points, CoordinateMetric::Linear)
+fn coordinate_entropy_impl(
+    one_d_data: &[Vec<f64>],
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+) -> Result<Vec<f64>, String> {
+    let n_frames: usize = one_d_data[0].len();
+    let one_d_constant = entropy_constant_with_convention(n_frames, 1, constant)?;
+
+    one_d_data
+        .par_iter()
+        .zip(metrics.par_iter())
+        .map(|(ic, metric)| {
+            calc_joint_nn([ic], [*metric]).map(|distance| {
+                estimate_entropy_efficient(distance, (n_frames as f64).recip(), one_d_constant)
+            })
+        })
+        .collect()
 }
 
-pub fn calc_one_d_nn_with_metric(points: &[f64], metric: CoordinateMetric) -> Result<f64, String> {
-    calc_joint_nn_with_metrics([points], [metric])
+/// Mutual information of every coordinate pair, in lexicographic pair order.
+pub fn estimate_coordinate_mutual_information(
+    one_d_data: &[Vec<f64>],
+    frames_end: usize,
+    options: &EntropyOptions,
+) -> Result<Vec<f64>, String> {
+    let (one_d_data, metrics) = resolve_input(one_d_data, frames_end, options)?;
+    let one_d_entropies = coordinate_entropy_impl(&one_d_data, &metrics, options.constant)?;
+    coordinate_mutual_information_impl(&one_d_data, &metrics, options.constant, &one_d_entropies)
 }
 
-pub fn calc_one_d_nn_kdtree(points: Vec<f64>) -> Result<f64, String> {
-    calc_one_d_nn(&points)
-}
+fn coordinate_mutual_information_impl(
+    one_d_data: &[Vec<f64>],
+    metrics: &[CoordinateMetric],
+    constant: FiniteSampleConstant,
+    one_d_entropies: &[f64],
+) -> Result<Vec<f64>, String> {
+    let n_frames: usize = one_d_data[0].len();
+    let degrees_freedom: usize = one_d_data.len();
+    let two_d_constant = entropy_constant_with_convention(n_frames, 2, constant)?;
+    let two_d_degrees_freedom = binomial(degrees_freedom, 2);
 
-pub fn calc_two_d_nn(points_1: &[f64], points_2: &[f64]) -> Result<f64, String> {
-    calc_two_d_nn_with_metrics(
-        points_1,
-        points_2,
-        [CoordinateMetric::Linear, CoordinateMetric::Linear],
-    )
-}
+    let mutual_information: Vec<f64> = (0..two_d_degrees_freedom)
+        .into_par_iter()
+        .map(|rank| {
+            let [i, j] = combination_from_rank::<2>(rank, degrees_freedom);
+            let joint_entropy = estimate_entropy_efficient(
+                calc_joint_nn([&one_d_data[i], &one_d_data[j]], [metrics[i], metrics[j]])? * 2.0,
+                (n_frames as f64).recip(),
+                two_d_constant,
+            );
+            Ok::<f64, String>(one_d_entropies[i] + one_d_entropies[j] - joint_entropy)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-pub fn calc_two_d_nn_with_metrics(
-    points_1: &[f64],
-    points_2: &[f64],
-    metrics: [CoordinateMetric; 2],
-) -> Result<f64, String> {
-    calc_joint_nn_with_metrics([points_1, points_2], metrics)
-}
-
-pub fn calc_three_d_nn(
-    points_1: &[f64],
-    points_2: &[f64],
-    points_3: &[f64],
-) -> Result<f64, String> {
-    calc_three_d_nn_with_metrics(points_1, points_2, points_3, [CoordinateMetric::Linear; 3])
-}
-
-pub fn calc_three_d_nn_with_metrics(
-    points_1: &[f64],
-    points_2: &[f64],
-    points_3: &[f64],
-    metrics: [CoordinateMetric; 3],
-) -> Result<f64, String> {
-    calc_joint_nn_with_metrics([points_1, points_2, points_3], metrics)
-}
-
-pub fn calc_four_d_nn(
-    points_1: &[f64],
-    points_2: &[f64],
-    points_3: &[f64],
-    points_4: &[f64],
-) -> Result<f64, String> {
-    calc_four_d_nn_with_metrics(
-        points_1,
-        points_2,
-        points_3,
-        points_4,
-        [CoordinateMetric::Linear; 4],
-    )
-}
-
-pub fn calc_four_d_nn_with_metrics(
-    points_1: &[f64],
-    points_2: &[f64],
-    points_3: &[f64],
-    points_4: &[f64],
-    metrics: [CoordinateMetric; 4],
-) -> Result<f64, String> {
-    calc_joint_nn_with_metrics([points_1, points_2, points_3, points_4], metrics)
+    assert_eq!(mutual_information.len(), two_d_degrees_freedom); // Just to be safe
+    Ok(mutual_information)
 }
 
 fn point_cmp<const K: usize>(left: &[f64; K], right: &[f64; K]) -> std::cmp::Ordering {
@@ -612,8 +453,10 @@ fn periodic_query_images<const K: usize>(
     images
 }
 
+/// Sum over frames of ln(distance to the nearest other frame) in the K-dimensional
+/// joint space of `coordinates`, using each coordinate's metric.
 #[allow(clippy::needless_range_loop)]
-fn calc_joint_nn_with_metrics<const K: usize>(
+pub fn calc_joint_nn<const K: usize>(
     coordinates: [&[f64]; K],
     metrics: [CoordinateMetric; K],
 ) -> Result<f64, String> {
@@ -686,16 +529,6 @@ pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
     let normal = Normal::new(mean, std_dev).unwrap();
     let mut rng = rand::thread_rng();
     (0..size).map(|_| normal.sample(&mut rng)).collect()
-}
-
-pub fn estimate_entropy(
-    nn_distance: f64,
-    n_frames: usize,
-    constant: f64,
-    n_internal_coords: usize,
-) -> f64 {
-    // println!("{constant}");
-    (nn_distance / (n_frames as f64)) + constant * (n_internal_coords as f64)
 }
 
 pub fn estimate_entropy_efficient(

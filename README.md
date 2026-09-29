@@ -45,31 +45,40 @@ Notes:
 ## Rust library usage
 
 ```rust
-use nn_entropy::calculate_entropy_from_data;
+use nn_entropy::{CoordinateMetric, EntropyOptions, FiniteSampleConstant, calculate_entropy};
 
 // one_d_data is Vec<Vec<f64>> with shape [n_coords][n_frames]
-let entropy = calculate_entropy_from_data(one_d_data, frames_end)?;
+let entropy = calculate_entropy(&one_d_data, frames_end, 2, &EntropyOptions::default())?;
+
+// Periodic torsions and the exact finite-sample constant
+let options = EntropyOptions {
+    metrics: Some(&metrics), // one CoordinateMetric per coordinate
+    constant: FiniteSampleConstant::Exact,
+};
+let entropy = calculate_entropy(&one_d_data, frames_end, 2, &options)?;
 ```
 
-Other helpers:
-- `calculate_entropy_from_data_with_order` for explicit MIE order 1, 2, 3, or 4.
-- `calculate_entropy_from_data_with_metrics` for explicit per-coordinate `CoordinateMetric::Linear` or `CoordinateMetric::Periodic { period }` metadata.
-- `calculate_entropy_from_data_with_metrics_and_constant` additionally selects `FiniteSampleConstant::PythonCompatibleAsymptotic` or `FiniteSampleConstant::Exact`.
-- `estimate_coordinate_entropy_rust` for per-coordinate entropy.
-- `estimate_coordinate_mutual_information_rust` for pairwise mutual information.
-- `estimate_coordinate_mie_entropy_rust` for per-coordinate second-order MIE entropy contributions. Each pairwise mutual information term is split evenly between the two coordinates, so the returned values sum to the order-2 total entropy.
-- Each per-coordinate estimator has a `_with_metrics` form for explicit coordinate metrics and a `_with_metrics_and_constant` form that also selects the finite-sample convention: `estimate_coordinate_entropy_with_metrics_and_constant`, `estimate_coordinate_mutual_information_with_metrics_and_constant`, and `estimate_coordinate_mie_entropy_with_metrics_and_constant`. Use these to keep per-coordinate values consistent with a total computed under `FiniteSampleConstant::Exact`; the shorter forms keep the historical `PythonCompatibleAsymptotic` convention.
+`EntropyOptions` has two fields:
+- `metrics`: per-coordinate `CoordinateMetric::Linear` or `CoordinateMetric::Periodic { period }`. The default, `None`, treats every coordinate as linear.
+- `constant`: `FiniteSampleConstant::PythonCompatibleAsymptotic` (the default) or `FiniteSampleConstant::Exact`.
+
+Every estimator takes the same options:
+- `calculate_entropy(data, frames_end, mie_order, &options)` returns the total entropy at MIE order 1, 2, 3 or 4.
+- `estimate_coordinate_entropy(data, frames_end, mie_order, &options)` returns each coordinate's share of the entropy at MIE order 1 or 2, so the values sum to `calculate_entropy` at the same order and with the same options. Order 1 gives the marginal entropies. Order 2 also splits each pairwise mutual information term evenly between its two coordinates. Orders 3 and 4 are rejected.
+- `estimate_coordinate_mutual_information(data, frames_end, &options)` returns the mutual information of each coordinate pair.
+- `calc_joint_nn([&x, &y, ...], metrics)` is the underlying nearest-neighbor sum, `sum over frames of ln(nearest-neighbor distance)`, in 1 to 4 dimensions.
 
 ## Python bindings
 
 The crate exposes a `nn_entropy` Python module (built from `src/pyo3_api.rs`) with:
 - `load_system(top_path, traj_path, start=None, stop=None, torsions_only=None, stride=None)`
-- `estimate_entropy(data_or_system, mie_order=None, periods=None)`
-- `estimate_mie_entropy(data, mie_order=None, periods=None)`
-- `estimate_coordinate_entropy(data, periods=None)`
-- `estimate_coordinate_mutual_information(data, periods=None)`
-- `estimate_coordinate_mie_entropy(data, periods=None)`
-- File-based estimator functions accept the same selection arguments, including `stride`; their coordinate metrics come from the generated BAT coordinates automatically.
+- `estimate_entropy(data_or_system, mie_order=None, periods=None, exact_constant=False)`. `mie_order` defaults to 2; `mie_order=1` gives the sum of the marginal entropies.
+- `estimate_coordinate_entropy(data_or_system, mie_order=None, periods=None, exact_constant=False)`. Returns each coordinate's share of the entropy; `mie_order` defaults to 2 and must be 1 or 2. The values sum to `estimate_entropy` at the same order.
+- `estimate_coordinate_mutual_information(data_or_system, periods=None, exact_constant=False)`
+- `System` has the same three estimators as methods, each taking `exact_constant` (and `mie_order` for the two entropy estimators).
+- To start from an Amber topology and trajectory, call `load_system(...)` once and use the `System` methods or pass the `System` to any estimator. The coordinate metrics come from the generated BAT coordinates automatically, and the trajectory is only read once no matter how many quantities you compute.
+
+`exact_constant=True` uses the exact finite-sample term, like the CLI's `--exact-constant`.
 
 For a raw array, `periods` is a sequence with one entry per coordinate. Use `None` for a linear dimension and a positive period for a periodic dimension. Omitting `periods` preserves the linear behavior of the original raw-array API.
 
@@ -81,8 +90,8 @@ import nn_entropy
 system = nn_entropy.load_system("system.parm7", "trajectory.nc")
 entropy = nn_entropy.estimate_entropy(system, mie_order=2)
 
-coordinate_entropy = system.estimate_coordinate_entropy()
-coordinate_mie_entropy = system.estimate_coordinate_mie_entropy()
+coordinate_entropy = system.estimate_coordinate_entropy()  # order 2, sums to `entropy`
+marginal_entropy = system.estimate_coordinate_entropy(mie_order=1)
 ```
 
 A typical build workflow uses `maturin`:

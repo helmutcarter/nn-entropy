@@ -21,7 +21,8 @@ fn test_one_d_nn_real_data() {
     ];
     let expected_value: f64 = -53.50470139636346; // Value from rust
 
-    let ln_distance = calc_one_d_nn(&coord).expect("calc_one_d_nn failed");
+    let ln_distance =
+        calc_joint_nn([&coord], [CoordinateMetric::Linear]).expect("1D nearest neighbor failed");
     assert_approx_eq!(ln_distance, expected_value, 5e-2);
 }
 
@@ -32,7 +33,8 @@ fn test_one_d_nn_real_data_with_repeats() {
     ];
     let expected_value: f64 = -7.173483307994341; // Value from rust
 
-    let ln_distance: f64 = calc_one_d_nn(&coord).expect("calc_one_d_nn failed");
+    let ln_distance: f64 =
+        calc_joint_nn([&coord], [CoordinateMetric::Linear]).expect("1D nearest neighbor failed");
 
     assert_approx_eq!(ln_distance, expected_value);
 }
@@ -40,7 +42,8 @@ fn test_one_d_nn_real_data_with_repeats() {
 #[test]
 fn test_one_d_nn_handles_nonconsecutive_repeats() {
     let coord = vec![0.0, 1.0, 0.0, 1.0, 0.0, 2.0];
-    let ln_distance = calc_one_d_nn(&coord).expect("calc_one_d_nn failed");
+    let ln_distance =
+        calc_joint_nn([&coord], [CoordinateMetric::Linear]).expect("1D nearest neighbor failed");
     assert_approx_eq!(ln_distance, 0.0);
 }
 
@@ -48,7 +51,8 @@ fn test_one_d_nn_handles_nonconsecutive_repeats() {
 fn test_joint_nn_handles_more_than_eight_duplicate_samples() {
     let coord_1 = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
     let coord_2 = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
-    let ln_distance = calc_two_d_nn(&coord_1, &coord_2).expect("calc_two_d_nn failed");
+    let ln_distance = calc_joint_nn([&coord_1, &coord_2], [CoordinateMetric::Linear; 2])
+        .expect("2D nearest neighbor failed");
     assert_approx_eq!(ln_distance, 10.0 * 2.0_f64.sqrt().ln());
 }
 
@@ -63,7 +67,7 @@ fn test_periodic_metric_crosses_branch_cut() {
     let metric = CoordinateMetric::Periodic {
         period: 2.0 * std::f64::consts::PI,
     };
-    let actual = calc_one_d_nn_with_metric(&points, metric).expect("periodic NN failed");
+    let actual = calc_joint_nn([&points], [metric]).expect("periodic NN failed");
     let expected = 2.0 * (2.0 * epsilon).ln() + (std::f64::consts::PI - epsilon).ln();
     assert_approx_eq!(actual, expected, 1e-12);
 }
@@ -74,8 +78,8 @@ fn test_periodic_metric_canonicalizes_out_of_range_values() {
     let canonical = vec![0.1, 1.0, 2.0];
     let shifted = vec![0.1 + period, 1.0 - period, 2.0 + 2.0 * period];
     let metric = CoordinateMetric::Periodic { period };
-    let expected = calc_one_d_nn_with_metric(&canonical, metric).unwrap();
-    let actual = calc_one_d_nn_with_metric(&shifted, metric).unwrap();
+    let expected = calc_joint_nn([&canonical], [metric]).unwrap();
+    let actual = calc_joint_nn([&shifted], [metric]).unwrap();
     assert_approx_eq!(actual, expected, 1e-12);
 }
 
@@ -94,11 +98,13 @@ fn test_four_dimensional_mixed_metrics_match_brute_force() {
         CoordinateMetric::Linear,
         CoordinateMetric::Periodic { period },
     ];
-    let actual = calc_four_d_nn_with_metrics(
-        &coordinates[0],
-        &coordinates[1],
-        &coordinates[2],
-        &coordinates[3],
+    let actual = calc_joint_nn(
+        [
+            &coordinates[0],
+            &coordinates[1],
+            &coordinates[2],
+            &coordinates[3],
+        ],
         metrics,
     )
     .unwrap();
@@ -131,7 +137,7 @@ fn test_four_dimensional_mixed_metrics_match_brute_force() {
 #[test]
 fn test_python_compatible_asymptotic_constant() {
     let data = vec![vec![0.0, 1.0]];
-    let entropy = calculate_entropy_from_data_with_order(data, 2, 1).unwrap();
+    let entropy = calculate_entropy(&data, 2, 1, &EntropyOptions::default()).unwrap();
     let expected = (4.0_f64).ln() + 0.57721566490153;
     assert_approx_eq!(entropy, expected, 1e-12);
 }
@@ -139,12 +145,14 @@ fn test_python_compatible_asymptotic_constant() {
 #[test]
 fn test_exact_finite_sample_constant() {
     let data = vec![vec![0.0, 1.0]];
-    let entropy = calculate_entropy_from_data_with_metrics_and_constant(
-        data,
+    let entropy = calculate_entropy(
+        &data,
         2,
         1,
-        &[CoordinateMetric::Linear],
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&[CoordinateMetric::Linear]),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .unwrap();
     let expected = 1.0 + 2.0_f64.ln();
@@ -154,19 +162,29 @@ fn test_exact_finite_sample_constant() {
 #[test]
 fn test_invalid_metric_metadata_is_rejected() {
     let data = vec![vec![0.0, 1.0], vec![1.0, 2.0]];
-    let err =
-        calculate_entropy_from_data_with_metrics(data.clone(), 2, 1, &[CoordinateMetric::Linear])
-            .expect_err("metric count should be validated");
-    assert!(err.contains("metrics"));
-
-    let err = calculate_entropy_from_data_with_metrics(
-        data,
+    let err = calculate_entropy(
+        &data,
         2,
         1,
-        &[
-            CoordinateMetric::Linear,
-            CoordinateMetric::Periodic { period: 0.0 },
-        ],
+        &EntropyOptions {
+            metrics: Some(&[CoordinateMetric::Linear]),
+            ..Default::default()
+        },
+    )
+    .expect_err("metric count should be validated");
+    assert!(err.contains("metrics"));
+
+    let err = calculate_entropy(
+        &data,
+        2,
+        1,
+        &EntropyOptions {
+            metrics: Some(&[
+                CoordinateMetric::Linear,
+                CoordinateMetric::Periodic { period: 0.0 },
+            ]),
+            ..Default::default()
+        },
     )
     .expect_err("period should be validated");
     assert!(err.contains("positive"));
@@ -175,7 +193,8 @@ fn test_invalid_metric_metadata_is_rejected() {
 #[test]
 fn test_one_d_nn_constant_series_is_invalid() {
     let coord: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0];
-    let err = calc_one_d_nn(&coord).expect_err("expected error for constant series");
+    let err = calc_joint_nn([&coord], [CoordinateMetric::Linear])
+        .expect_err("expected error for constant series");
     assert!(err.contains("distinct"));
 }
 
@@ -190,23 +209,9 @@ fn test_two_d_nn_real_data() {
         1.3128584, 1.39146681, 1.31523388,
     ];
     let expected_value: f64 = -40.28617063678864; // Value from rust
-    let ln_distance: f64 = calc_two_d_nn(&coord_1, &coord_2).expect("calc_two_d_nn failed");
+    let ln_distance: f64 = calc_joint_nn([&coord_1, &coord_2], [CoordinateMetric::Linear; 2])
+        .expect("2D nearest neighbor failed");
     assert_approx_eq!(ln_distance, expected_value);
-}
-
-#[test]
-fn test_calculate_entropy_order_two_matches_default() {
-    let data = vec![
-        vec![0.1, 0.4, 0.8, 1.1, 1.7],
-        vec![1.0, 1.3, 1.9, 2.2, 2.8],
-        vec![2.0, 2.4, 2.7, 3.1, 3.5],
-    ];
-    let default_entropy =
-        calculate_entropy_from_data(data.clone(), 5).expect("default entropy failed");
-    let order_two_entropy =
-        calculate_entropy_from_data_with_order(data, 5, 2).expect("order-2 entropy failed");
-
-    assert_approx_eq!(default_entropy, order_two_entropy);
 }
 
 #[test]
@@ -218,20 +223,23 @@ fn test_coordinate_mutual_information_returns_pairwise_mi() {
     let one_d_constant = kl_constant(n_frames, 1);
     let two_d_constant = kl_constant(n_frames, 2);
 
-    let pairwise_mi = estimate_coordinate_mutual_information_rust(data, n_frames)
-        .expect("coordinate mutual information failed");
+    let pairwise_mi =
+        estimate_coordinate_mutual_information(&data, n_frames, &EntropyOptions::default())
+            .expect("coordinate mutual information failed");
     let entropy_1 = estimate_entropy_efficient(
-        calc_one_d_nn(&coord_1).expect("1D nearest neighbor failed"),
+        calc_joint_nn([&coord_1], [CoordinateMetric::Linear]).expect("1D nearest neighbor failed"),
         (n_frames as f64).recip(),
         one_d_constant,
     );
     let entropy_2 = estimate_entropy_efficient(
-        calc_one_d_nn(&coord_2).expect("1D nearest neighbor failed"),
+        calc_joint_nn([&coord_2], [CoordinateMetric::Linear]).expect("1D nearest neighbor failed"),
         (n_frames as f64).recip(),
         one_d_constant,
     );
     let joint_entropy = estimate_entropy_efficient(
-        calc_two_d_nn(&coord_1, &coord_2).expect("2D nearest neighbor failed") * 2.0,
+        calc_joint_nn([&coord_1, &coord_2], [CoordinateMetric::Linear; 2])
+            .expect("2D nearest neighbor failed")
+            * 2.0,
         (n_frames as f64).recip(),
         two_d_constant,
     );
@@ -249,11 +257,12 @@ fn test_coordinate_mie_entropy_sums_to_total_second_order_entropy() {
     ];
     let n_frames = data[0].len();
 
-    let coordinate_mie_entropy = estimate_coordinate_mie_entropy_rust(data.clone(), n_frames)
-        .expect("coordinate MIE entropy failed");
+    let coordinate_mie_entropy =
+        estimate_coordinate_entropy(&data, n_frames, 2, &EntropyOptions::default())
+            .expect("coordinate MIE entropy failed");
     let total_from_coordinates: f64 = coordinate_mie_entropy.iter().sum();
-    let total_entropy =
-        calculate_entropy_from_data_with_order(data, n_frames, 2).expect("order-2 entropy failed");
+    let total_entropy = calculate_entropy(&data, n_frames, 2, &EntropyOptions::default())
+        .expect("order-2 entropy failed");
 
     assert_approx_eq!(total_from_coordinates, total_entropy);
 }
@@ -267,10 +276,15 @@ fn test_third_order_entropy_for_three_coordinates_matches_joint_entropy() {
     let n_frames = data[0].len();
     let three_d_constant = kl_constant(n_frames, 3);
 
-    let entropy =
-        calculate_entropy_from_data_with_order(data, n_frames, 3).expect("order-3 entropy failed");
+    let entropy = calculate_entropy(&data, n_frames, 3, &EntropyOptions::default())
+        .expect("order-3 entropy failed");
     let direct_joint_entropy = estimate_entropy_efficient(
-        calc_three_d_nn(&coord_1, &coord_2, &coord_3).expect("3D nearest neighbor failed") * 3.0,
+        calc_joint_nn(
+            [&coord_1, &coord_2, &coord_3],
+            [CoordinateMetric::Linear; 3],
+        )
+        .expect("3D nearest neighbor failed")
+            * 3.0,
         (n_frames as f64).recip(),
         three_d_constant,
     );
@@ -293,10 +307,14 @@ fn test_fourth_order_entropy_for_four_coordinates_matches_joint_entropy() {
     let n_frames = data[0].len();
     let four_d_constant = kl_constant(n_frames, 4);
 
-    let entropy =
-        calculate_entropy_from_data_with_order(data, n_frames, 4).expect("order-4 entropy failed");
+    let entropy = calculate_entropy(&data, n_frames, 4, &EntropyOptions::default())
+        .expect("order-4 entropy failed");
     let direct_joint_entropy = estimate_entropy_efficient(
-        calc_four_d_nn(&coord_1, &coord_2, &coord_3, &coord_4).expect("4D nearest neighbor failed")
+        calc_joint_nn(
+            [&coord_1, &coord_2, &coord_3, &coord_4],
+            [CoordinateMetric::Linear; 4],
+        )
+        .expect("4D nearest neighbor failed")
             * 4.0,
         (n_frames as f64).recip(),
         four_d_constant,
@@ -308,7 +326,7 @@ fn test_fourth_order_entropy_for_four_coordinates_matches_joint_entropy() {
 #[test]
 fn test_unsupported_mie_order_is_invalid() {
     let data = vec![vec![0.1, 0.4, 0.8], vec![1.0, 1.3, 1.9]];
-    let err = calculate_entropy_from_data_with_order(data, 3, 5)
+    let err = calculate_entropy(&data, 3, 5, &EntropyOptions::default())
         .expect_err("expected unsupported MIE order error");
 
     assert!(err.contains("unsupported MIE order"));
@@ -454,11 +472,14 @@ fn coordinate_entropy_exact_constant_matches_closed_form() {
     // One coordinate, two frames one unit apart: both nearest-neighbor distances
     // are 1, so the log-distance sum vanishes and the estimate is the constant
     // alone: ln(V_1) + H_(N-1) = ln(2) + 1.
-    let entropies = estimate_coordinate_entropy_with_metrics_and_constant(
-        vec![vec![0.0, 1.0]],
+    let entropies = estimate_coordinate_entropy(
+        &[vec![0.0, 1.0]],
         2,
-        &[CoordinateMetric::Linear],
-        FiniteSampleConstant::Exact,
+        1,
+        &EntropyOptions {
+            metrics: Some(&[CoordinateMetric::Linear]),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .expect("exact-constant coordinate entropy failed");
 
@@ -474,19 +495,24 @@ fn coordinate_entropies_sum_to_first_order_total_under_exact_constant() {
     let n_frames = data[0].len();
     let metrics = vec![CoordinateMetric::Linear; data.len()];
 
-    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
-        data.clone(),
-        n_frames,
-        &metrics,
-        FiniteSampleConstant::Exact,
-    )
-    .expect("exact-constant coordinate entropy failed");
-    let total = calculate_entropy_from_data_with_metrics_and_constant(
-        data,
+    let coordinate_entropies = estimate_coordinate_entropy(
+        &data,
         n_frames,
         1,
-        &metrics,
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
+    )
+    .expect("exact-constant coordinate entropy failed");
+    let total = calculate_entropy(
+        &data,
+        n_frames,
+        1,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .expect("exact-constant order-1 entropy failed");
 
@@ -502,18 +528,22 @@ fn mutual_information_convention_shift_equals_sample_term_difference() {
     let n_frames = data[0].len();
     let metrics = vec![CoordinateMetric::Linear; data.len()];
 
-    let asymptotic = estimate_coordinate_mutual_information_with_metrics_and_constant(
-        data.clone(),
+    let asymptotic = estimate_coordinate_mutual_information(
+        &data,
         n_frames,
-        &metrics,
-        FiniteSampleConstant::PythonCompatibleAsymptotic,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::PythonCompatibleAsymptotic,
+        },
     )
     .expect("asymptotic mutual information failed");
-    let exact = estimate_coordinate_mutual_information_with_metrics_and_constant(
-        data,
+    let exact = estimate_coordinate_mutual_information(
+        &data,
         n_frames,
-        &metrics,
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .expect("exact mutual information failed");
 
@@ -544,19 +574,24 @@ fn coordinate_mie_entropy_sums_to_second_order_total_under_exact_constant() {
     let n_frames = data[0].len();
     let metrics = vec![CoordinateMetric::Linear; data.len()];
 
-    let coordinate_mie = estimate_coordinate_mie_entropy_with_metrics_and_constant(
-        data.clone(),
-        n_frames,
-        &metrics,
-        FiniteSampleConstant::Exact,
-    )
-    .expect("exact-constant coordinate MIE entropy failed");
-    let total = calculate_entropy_from_data_with_metrics_and_constant(
-        data,
+    let coordinate_mie = estimate_coordinate_entropy(
+        &data,
         n_frames,
         2,
-        &metrics,
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
+    )
+    .expect("exact-constant coordinate MIE entropy failed");
+    let total = calculate_entropy(
+        &data,
+        n_frames,
+        2,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .expect("exact-constant order-2 entropy failed");
 
@@ -576,19 +611,24 @@ fn coordinate_estimators_compose_exact_constant_with_periodic_metrics() {
     let n_frames = data[0].len();
     let metrics = vec![CoordinateMetric::Periodic { period }; data.len()];
 
-    let coordinate_entropies = estimate_coordinate_entropy_with_metrics_and_constant(
-        data.clone(),
-        n_frames,
-        &metrics,
-        FiniteSampleConstant::Exact,
-    )
-    .expect("periodic exact-constant coordinate entropy failed");
-    let total = calculate_entropy_from_data_with_metrics_and_constant(
-        data,
+    let coordinate_entropies = estimate_coordinate_entropy(
+        &data,
         n_frames,
         1,
-        &metrics,
-        FiniteSampleConstant::Exact,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
+    )
+    .expect("periodic exact-constant coordinate entropy failed");
+    let total = calculate_entropy(
+        &data,
+        n_frames,
+        1,
+        &EntropyOptions {
+            metrics: Some(&metrics),
+            constant: FiniteSampleConstant::Exact,
+        },
     )
     .expect("periodic exact-constant order-1 entropy failed");
 
@@ -596,44 +636,33 @@ fn coordinate_estimators_compose_exact_constant_with_periodic_metrics() {
 }
 
 #[test]
-fn coordinate_estimators_default_to_the_python_compatible_constant() {
-    // The historical entry points must keep the asymptotic convention.
+fn default_options_use_linear_metrics_and_the_python_compatible_constant() {
+    // Leaving the options at their defaults must keep the historical behavior.
     let data = three_coordinate_sample();
     let n_frames = data[0].len();
     let metrics = vec![CoordinateMetric::Linear; data.len()];
-    let default_constant = FiniteSampleConstant::PythonCompatibleAsymptotic;
+    let default = EntropyOptions::default();
+    let explicit = EntropyOptions {
+        metrics: Some(&metrics),
+        constant: FiniteSampleConstant::PythonCompatibleAsymptotic,
+    };
 
-    let entropy_default =
-        estimate_coordinate_entropy_with_metrics(data.clone(), n_frames, &metrics).unwrap();
-    let entropy_explicit = estimate_coordinate_entropy_with_metrics_and_constant(
-        data.clone(),
-        n_frames,
-        &metrics,
-        default_constant,
-    )
-    .unwrap();
-    assert_eq!(entropy_default, entropy_explicit);
-
-    let mi_default =
-        estimate_coordinate_mutual_information_with_metrics(data.clone(), n_frames, &metrics)
-            .unwrap();
-    let mi_explicit = estimate_coordinate_mutual_information_with_metrics_and_constant(
-        data.clone(),
-        n_frames,
-        &metrics,
-        default_constant,
-    )
-    .unwrap();
-    assert_eq!(mi_default, mi_explicit);
-
-    let mie_default =
-        estimate_coordinate_mie_entropy_with_metrics(data.clone(), n_frames, &metrics).unwrap();
-    let mie_explicit = estimate_coordinate_mie_entropy_with_metrics_and_constant(
-        data,
-        n_frames,
-        &metrics,
-        default_constant,
-    )
-    .unwrap();
-    assert_eq!(mie_default, mie_explicit);
+    for order in 1..=3 {
+        assert_eq!(
+            calculate_entropy(&data, n_frames, order, &default).unwrap(),
+            calculate_entropy(&data, n_frames, order, &explicit).unwrap()
+        );
+    }
+    assert_eq!(
+        estimate_coordinate_entropy(&data, n_frames, 1, &default).unwrap(),
+        estimate_coordinate_entropy(&data, n_frames, 1, &explicit).unwrap()
+    );
+    assert_eq!(
+        estimate_coordinate_mutual_information(&data, n_frames, &default).unwrap(),
+        estimate_coordinate_mutual_information(&data, n_frames, &explicit).unwrap()
+    );
+    assert_eq!(
+        estimate_coordinate_entropy(&data, n_frames, 2, &default).unwrap(),
+        estimate_coordinate_entropy(&data, n_frames, 2, &explicit).unwrap()
+    );
 }

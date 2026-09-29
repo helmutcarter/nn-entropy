@@ -2,9 +2,7 @@ use std::env;
 use std::path::Path;
 
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{
-    CoordinateMetric, FiniteSampleConstant, calculate_entropy_from_data_with_metrics_and_constant,
-};
+use nn_entropy::{CoordinateMetric, EntropyOptions, FiniteSampleConstant, calculate_entropy};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -185,13 +183,11 @@ fn main() {
     } else {
         FiniteSampleConstant::PythonCompatibleAsymptotic
     };
-    let entropy = match calculate_entropy_from_data_with_metrics_and_constant(
-        one_d_data,
-        used_frames,
-        mie_order,
-        &metrics,
+    let options = EntropyOptions {
+        metrics: Some(&metrics),
         constant,
-    ) {
+    };
+    let entropy = match calculate_entropy(&one_d_data, used_frames, mie_order, &options) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("Entropy calculation failed: {err}");
