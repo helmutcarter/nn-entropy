@@ -435,7 +435,6 @@ dependencies = [
  "assert_approx_eq",
  "csv",
  "kiddo",
- "libm",
  "ndarray 0.16.1",
  "numpy",
  "pyo3",

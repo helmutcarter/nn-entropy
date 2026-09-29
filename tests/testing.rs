@@ -1,4 +1,7 @@
 use assert_approx_eq::assert_approx_eq;
+use nn_entropy::bat_library::geometry::{
+    bond_angle, bond_length, internal_coordinates, torsion_angle,
+};
 use nn_entropy::*;
 use rand_distr::{Distribution, Normal};
 
@@ -340,67 +343,36 @@ pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
 }
 
 // Helper function to compare floating-point arrays with tolerance
-fn assert_approx_eq_array(a: [f64; 3], b: [f64; 3]) {
-    let epsilon = 1e-10;
-    assert!(
-        (a[0] - b[0]).abs() < epsilon,
-        "x component mismatch: {} vs {}",
-        a[0],
-        b[0]
-    );
-    assert!(
-        (a[1] - b[1]).abs() < epsilon,
-        "y component mismatch: {} vs {}",
-        a[1],
-        b[1]
-    );
-    assert!(
-        (a[2] - b[2]).abs() < epsilon,
-        "z component mismatch: {} vs {}",
-        a[2],
-        b[2]
-    );
-}
 #[test]
-fn test_cross_product() {
-    // Known value test
-    let b1 = [2.0, 3.0, 4.0];
-    let b2 = [5.0, 6.0, 7.0];
-    let result = cross_product(b1, b2);
-    let expected_result: [f64; 3] = [-3.0, 6.0, -3.0];
-    assert_approx_eq_array(result, expected_result);
-}
-
-#[test]
-fn test_calc_torsion() {
+fn test_torsion_angle() {
     let a1: [f64; 3] = [70.73, -91.32219, -87.903145];
     let a2: [f64; 3] = [71.543846, -91.90568, -87.45525];
     let a3: [f64; 3] = [70.995895, -92.99476, -86.545074];
     let a4: [f64; 3] = [71.78272, -93.75866, -86.517555];
-    let result: f64 = calc_torsion(a1, a2, a3, a4);
+    let result: f64 = torsion_angle(a1, a2, a3, a4);
     let expected_result: f64 = -2.71362;
     assert_approx_eq!(result, expected_result, 3e-6);
 }
 
 #[test]
-fn test_calc_angle() {
+fn test_bond_angle() {
     let a1: [f64; 3] = [71.78272, -93.75866, -86.517555];
     let a2: [f64; 3] = [70.995895, -92.99476, -86.545074];
     let a3: [f64; 3] = [71.543846, -91.90568, -87.45525];
-    let result: f64 = calc_angle(a1, a2, a3);
+    let result: f64 = bond_angle(a1, a2, a3);
     assert_approx_eq!(result, 1.828803312585639);
 }
 #[test]
-fn test_calc_bond() {
+fn test_bond_length() {
     let a1: [f64; 3] = [71.543846, -91.90568, -87.45525];
     let a2: [f64; 3] = [70.995895, -92.99476, -86.545074];
-    let result: f64 = calc_bond(a1, a2);
+    let result: f64 = bond_length(a1, a2);
     let expected_result: f64 = 1.5214378340021502;
     assert_approx_eq!(result, expected_result, 3e-6);
 }
 
 #[test]
-fn test_calc_internal_coords() {
+fn test_internal_coordinates() {
     let bat_list: Vec<Vec<usize>> = vec![
         vec![0, 1],
         vec![7, 1, 0],
@@ -439,7 +411,7 @@ fn test_calc_internal_coords() {
         -0.76085043,
         1.55080378,
     ]];
-    let result = calc_internal_coords(bat_list, trajectory);
+    let result = internal_coordinates(&bat_list, &trajectory);
     assert_eq!(result.len(), expected_result.len());
     assert_eq!(result[0].len(), expected_result[0].len());
     for idx in 0..expected_result[0].len() {

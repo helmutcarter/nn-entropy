@@ -16,8 +16,9 @@ use common::amber::{
     TIP4PEW_ATOMS, TIP4PEW_BONDS, Topology, WATER_BONDS, chain_frames, concat_frames, ion_frames,
     scratch_path, water_frames, write_netcdf, write_prmtop,
 };
+use nn_entropy::CoordinateMetric;
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{CoordinateMetric, calc_bond};
+use nn_entropy::bat_library::geometry::bond_length;
 
 const FRAMES: usize = 12;
 
@@ -101,7 +102,7 @@ fn a_lone_chain_reads_the_bonds_it_was_built_with() {
             .collect();
         let mut expected: Vec<f64> = [(1, 2), (2, 3), (3, 4)]
             .iter()
-            .map(|&(a, b)| calc_bond(written[a], written[b]))
+            .map(|&(a, b)| bond_length(written[a], written[b]))
             .collect();
         let mut actual = frame[..3].to_vec();
         expected.sort_by(f64::total_cmp);

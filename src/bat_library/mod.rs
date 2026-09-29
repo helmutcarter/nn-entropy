@@ -6,6 +6,10 @@ use std::path::Path;
 
 use crate::CoordinateMetric;
 
+pub mod geometry;
+
+use geometry::{internal_coordinates, internal_coordinates_f32};
+
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Debug, Clone)]
@@ -710,94 +714,6 @@ fn build_bat(fragment: &[usize], adjacency: &[Vec<usize>], masses: &[f64]) -> Re
     })
 }
 
-fn bond_calc(a1: [f64; 3], a2: [f64; 3]) -> f64 {
-    let dx = a1[0] - a2[0];
-    let dy = a1[1] - a2[1];
-    let dz = a1[2] - a2[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-fn angle_calc(a1: [f64; 3], a2: [f64; 3], a3: [f64; 3]) -> f64 {
-    let v1 = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
-    let v2 = [a3[0] - a2[0], a3[1] - a2[1], a3[2] - a2[2]];
-    let v1_mag = (v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]).sqrt();
-    let v2_mag = (v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]).sqrt();
-    let dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
-    let denom = v1_mag * v2_mag;
-    (dot / denom).acos()
-}
-
-fn torsion_calc(a1: [f64; 3], a2: [f64; 3], a3: [f64; 3], a4: [f64; 3]) -> f64 {
-    let b1 = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
-    let b2 = [a2[0] - a3[0], a2[1] - a3[1], a2[2] - a3[2]];
-    let b3 = [a3[0] - a4[0], a3[1] - a4[1], a3[2] - a4[2]];
-
-    let c1 = [
-        b2[1] * b3[2] - b2[2] * b3[1],
-        b2[2] * b3[0] - b2[0] * b3[2],
-        b2[0] * b3[1] - b2[1] * b3[0],
-    ];
-    let c2 = [
-        b1[1] * b2[2] - b1[2] * b2[1],
-        b1[2] * b2[0] - b1[0] * b2[2],
-        b1[0] * b2[1] - b1[1] * b2[0],
-    ];
-
-    let p1 = (b1[0] * c1[0] + b1[1] * c1[1] + b1[2] * c1[2])
-        * (b2[0] * b2[0] + b2[1] * b2[1] + b2[2] * b2[2]).sqrt();
-    let p2 = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
-
-    p1.atan2(p2)
-}
-
-fn bond_calc_f32(a1: [f32; 3], a2: [f32; 3]) -> f64 {
-    let dx = a1[0] - a2[0];
-    let dy = a1[1] - a2[1];
-    let dz = a1[2] - a2[2];
-    let sum = (dx as f64) * (dx as f64) + (dy as f64) * (dy as f64) + (dz as f64) * (dz as f64);
-    sum.sqrt()
-}
-
-fn angle_calc_f32(a1: [f32; 3], a2: [f32; 3], a3: [f32; 3]) -> f64 {
-    let v1 = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
-    let v2 = [a3[0] - a2[0], a3[1] - a2[1], a3[2] - a2[2]];
-    let v1_sum = (v1[0] as f64) * (v1[0] as f64)
-        + (v1[1] as f64) * (v1[1] as f64)
-        + (v1[2] as f64) * (v1[2] as f64);
-    let v2_sum = (v2[0] as f64) * (v2[0] as f64)
-        + (v2[1] as f64) * (v2[1] as f64)
-        + (v2[2] as f64) * (v2[2] as f64);
-    let v1_mag = v1_sum.sqrt();
-    let v2_mag = v2_sum.sqrt();
-    let dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
-    let denom = v1_mag * v2_mag;
-    ((dot as f64) / denom).acos()
-}
-
-fn torsion_calc_f32(a1: [f32; 3], a2: [f32; 3], a3: [f32; 3], a4: [f32; 3]) -> f64 {
-    let b1 = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
-    let b2 = [a2[0] - a3[0], a2[1] - a3[1], a2[2] - a3[2]];
-    let b3 = [a3[0] - a4[0], a3[1] - a4[1], a3[2] - a4[2]];
-
-    let c1 = [
-        b2[1] * b3[2] - b2[2] * b3[1],
-        b2[2] * b3[0] - b2[0] * b3[2],
-        b2[0] * b3[1] - b2[1] * b3[0],
-    ];
-    let c2 = [
-        b1[1] * b2[2] - b1[2] * b2[1],
-        b1[2] * b2[0] - b1[0] * b2[2],
-        b1[0] * b2[1] - b1[1] * b2[0],
-    ];
-
-    let p1_f32 = b1[0] * c1[0] + b1[1] * c1[1] + b1[2] * c1[2];
-    let b2_sum = b2[0] * b2[0] + b2[1] * b2[1] + b2[2] * b2[2];
-    let p1 = (p1_f32 as f64) * (b2_sum as f64).sqrt();
-    let p2_f32 = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
-
-    p1.atan2(p2_f32 as f64)
-}
-
 fn build_bat_list(
     fragment: &[usize],
     adjacency: &[Vec<usize>],
@@ -829,60 +745,6 @@ fn build_bat_list(
     }
 
     Ok(bat_list)
-}
-
-fn int_c(bat_list: &[Vec<usize>], traj: &[Vec<[f64; 3]>]) -> Vec<Vec<f64>> {
-    let frame_number = traj.len();
-    let int_coord_number = bat_list.len();
-    let mut int_coords = vec![vec![0.0f64; int_coord_number]; frame_number];
-
-    for i in 0..frame_number {
-        for j in 0..int_coord_number {
-            let entry = &bat_list[j];
-            if entry.len() == 2 {
-                int_coords[i][j] = bond_calc(traj[i][entry[0]], traj[i][entry[1]]);
-            } else if entry.len() == 3 {
-                int_coords[i][j] =
-                    angle_calc(traj[i][entry[0]], traj[i][entry[1]], traj[i][entry[2]]);
-            } else if entry.len() == 4 {
-                int_coords[i][j] = torsion_calc(
-                    traj[i][entry[0]],
-                    traj[i][entry[1]],
-                    traj[i][entry[2]],
-                    traj[i][entry[3]],
-                );
-            }
-        }
-    }
-
-    int_coords
-}
-
-fn int_c_f32(bat_list: &[Vec<usize>], traj: &[Vec<[f32; 3]>]) -> Vec<Vec<f64>> {
-    let frame_number = traj.len();
-    let int_coord_number = bat_list.len();
-    let mut int_coords = vec![vec![0.0f64; int_coord_number]; frame_number];
-
-    for i in 0..frame_number {
-        for j in 0..int_coord_number {
-            let entry = &bat_list[j];
-            if entry.len() == 2 {
-                int_coords[i][j] = bond_calc_f32(traj[i][entry[0]], traj[i][entry[1]]);
-            } else if entry.len() == 3 {
-                int_coords[i][j] =
-                    angle_calc_f32(traj[i][entry[0]], traj[i][entry[1]], traj[i][entry[2]]);
-            } else if entry.len() == 4 {
-                int_coords[i][j] = torsion_calc_f32(
-                    traj[i][entry[0]],
-                    traj[i][entry[1]],
-                    traj[i][entry[2]],
-                    traj[i][entry[3]],
-                );
-            }
-        }
-    }
-
-    int_coords
 }
 
 pub struct InternalCoordinates {
@@ -1040,10 +902,10 @@ impl InternalCoordinates {
         }
         if vartype == 5 {
             let coords = reader.read_coordinates_f32(frames, &self.atoms)?;
-            self.int_coords = int_c_f32(&self.bat_list, &coords);
+            self.int_coords = internal_coordinates_f32(&self.bat_list, &coords);
         } else {
             let coords = reader.read_coordinates_f64(frames, &self.atoms)?;
-            self.int_coords = int_c(&self.bat_list, &coords);
+            self.int_coords = internal_coordinates(&self.bat_list, &coords);
         }
         Ok(())
     }

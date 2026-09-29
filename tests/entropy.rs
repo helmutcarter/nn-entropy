@@ -9,6 +9,10 @@ fn test_data_path(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
+// The pinned totals below are regression values produced by this crate. They
+// changed at about 1e-7 relative when bond angles moved from a float32 acos to
+// an f64 atan2 (the angles themselves moved by at most 6.5e-8 rad); with only
+// five frames, the nearest-neighbor sums magnify that rounding noise.
 fn one_d_data_from_fixture(torsions_only: bool) -> (Vec<Vec<f64>>, usize, Vec<CoordinateMetric>) {
     let top = test_data_path("tests/fixtures/test.parm7");
     let traj = test_data_path("tests/fixtures/test.nc");
@@ -47,7 +51,7 @@ fn first_order_entropy_matches_periodic_fixture_regression() {
         },
     )
     .expect("first-order entropy calculation failed");
-    let expected = -43.2442783659548_f64;
+    let expected = -43.24428414710785_f64;
     let diff = (entropy - expected).abs();
     assert!(
         diff < 1e-9,
@@ -70,7 +74,7 @@ fn coordinate_first_order_entropy_sums_to_fixture_total() {
     .expect("coordinate entropy calculation failed");
     assert_eq!(entropies.len(), metrics.len());
     let sum: f64 = entropies.iter().sum();
-    assert!((sum - (-43.2442783659548)).abs() < 1e-9);
+    assert!((sum - (-43.24428414710785)).abs() < 1e-9);
 }
 
 #[test]
@@ -86,7 +90,7 @@ fn second_order_entropy_matches_periodic_fixture_regression() {
         },
     )
     .expect("second-order entropy calculation failed");
-    let expected = -130.49745250649198_f64;
+    let expected = -130.4973107281728_f64;
     let diff = (entropy - expected).abs();
     assert!(
         diff < 1e-9,
@@ -107,7 +111,7 @@ fn default_entropy_matches_second_order_reference_for_test_fixture() {
         },
     )
     .expect("entropy calculation failed");
-    let expected = -130.49745250649198_f64;
+    let expected = -130.4973107281728_f64;
     let diff = (entropy - expected).abs();
     assert!(
         diff < 1e-9,

@@ -10,9 +10,10 @@ mod common;
 
 use std::path::PathBuf;
 
+use nn_entropy::CoordinateMetric;
 use nn_entropy::bat_library::InternalCoordinates;
-use nn_entropy::{
-    CoordinateMetric, calc_angle, calc_bond, calc_internal_coords, calc_torsion, cross_product,
+use nn_entropy::bat_library::geometry::{
+    bond_angle, bond_length, internal_coordinates, torsion_angle,
 };
 
 fn assert_close(actual: f64, expected: f64, tolerance: f64, what: &str) {
@@ -31,34 +32,34 @@ fn assert_close(actual: f64, expected: f64, tolerance: f64, what: &str) {
 #[test]
 fn bond_lengths_match_constructed_distances() {
     assert_close(
-        calc_bond([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        bond_length([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
         1.0,
         1e-15,
         "unit separation along x",
     );
     // 3-4-5 right triangle, then the 3-4-12-13 Pythagorean quadruple.
     assert_close(
-        calc_bond([0.0, 0.0, 0.0], [3.0, 4.0, 0.0]),
+        bond_length([0.0, 0.0, 0.0], [3.0, 4.0, 0.0]),
         5.0,
         1e-15,
         "3-4-5",
     );
     assert_close(
-        calc_bond([0.0, 0.0, 0.0], [3.0, 4.0, 12.0]),
+        bond_length([0.0, 0.0, 0.0], [3.0, 4.0, 12.0]),
         13.0,
         1e-15,
         "3-4-12-13",
     );
     // Translation invariance of a distance.
     assert_close(
-        calc_bond([10.5, -3.25, 7.0], [13.5, 0.75, 19.0]),
+        bond_length([10.5, -3.25, 7.0], [13.5, 0.75, 19.0]),
         13.0,
         1e-13,
         "translated 3-4-12-13",
     );
     // Coincident atoms give exactly zero, not a NaN.
     assert_close(
-        calc_bond([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]),
+        bond_length([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]),
         0.0,
         0.0,
         "coincident atoms",
@@ -75,7 +76,7 @@ fn angles_match_constructed_geometry() {
 
     // Right angle between the x and y axes.
     assert_close(
-        calc_angle([1.0, 0.0, 0.0], origin, [0.0, 1.0, 0.0]),
+        bond_angle([1.0, 0.0, 0.0], origin, [0.0, 1.0, 0.0]),
         std::f64::consts::FRAC_PI_2,
         1e-15,
         "90 degrees",
@@ -84,7 +85,7 @@ fn angles_match_constructed_geometry() {
     // Equilateral triangle: the apex subtends 60 degrees.
     let equilateral_apex = [0.5, 3.0_f64.sqrt() / 2.0, 0.0];
     assert_close(
-        calc_angle(origin, equilateral_apex, [1.0, 0.0, 0.0]),
+        bond_angle(origin, equilateral_apex, [1.0, 0.0, 0.0]),
         std::f64::consts::FRAC_PI_3,
         1e-15,
         "60 degrees",
@@ -93,7 +94,7 @@ fn angles_match_constructed_geometry() {
     // Ideal tetrahedral angle, acos(-1/3) ~ 109.47 degrees: two vertices of a
     // regular tetrahedron seen from its center.
     assert_close(
-        calc_angle([1.0, 1.0, 1.0], origin, [1.0, -1.0, -1.0]),
+        bond_angle([1.0, 1.0, 1.0], origin, [1.0, -1.0, -1.0]),
         (-1.0_f64 / 3.0).acos(),
         1e-15,
         "tetrahedral",
@@ -101,7 +102,7 @@ fn angles_match_constructed_geometry() {
 
     // Angle magnitude does not depend on the arm lengths.
     assert_close(
-        calc_angle([7.0, 0.0, 0.0], origin, [0.0, 0.125, 0.0]),
+        bond_angle([7.0, 0.0, 0.0], origin, [0.0, 0.125, 0.0]),
         std::f64::consts::FRAC_PI_2,
         1e-15,
         "90 degrees with unequal arms",
@@ -115,17 +116,17 @@ fn collinear_and_parallel_arms_stay_finite() {
     // Exactly antiparallel arms: the cosine is -1 and the angle is pi. This is
     // the configuration where an unclamped acos would be at risk of NaN, so the
     // assertion is that the result is finite as well as correct.
-    let straight = calc_angle([-2.0, 0.0, 0.0], origin, [5.0, 0.0, 0.0]);
+    let straight = bond_angle([-2.0, 0.0, 0.0], origin, [5.0, 0.0, 0.0]);
     assert!(straight.is_finite(), "collinear angle was {straight}");
     assert_close(straight, std::f64::consts::PI, 1e-12, "180 degrees");
 
     // Exactly parallel arms: cosine +1, angle 0.
-    let folded = calc_angle([2.0, 0.0, 0.0], origin, [5.0, 0.0, 0.0]);
+    let folded = bond_angle([2.0, 0.0, 0.0], origin, [5.0, 0.0, 0.0]);
     assert!(folded.is_finite(), "parallel angle was {folded}");
     assert_close(folded, 0.0, 1e-12, "0 degrees");
 
     // A near-linear arrangement, as an sp-hybridized centre would produce.
-    let nearly = calc_angle([-3.0, 1e-7, 0.0], origin, [4.0, 0.0, 0.0]);
+    let nearly = bond_angle([-3.0, 1e-7, 0.0], origin, [4.0, 0.0, 0.0]);
     assert!(nearly.is_finite(), "near-linear angle was {nearly}");
     assert!(
         (nearly - std::f64::consts::PI).abs() < 1e-6,
@@ -140,7 +141,7 @@ fn angles_lie_in_the_closed_zero_pi_interval() {
         let a = [rng.normal(), rng.normal(), rng.normal()];
         let b = [rng.normal(), rng.normal(), rng.normal()];
         let c = [rng.normal(), rng.normal(), rng.normal()];
-        let angle = calc_angle(a, b, c);
+        let angle = bond_angle(a, b, c);
         assert!(
             angle.is_finite() && (0.0..=std::f64::consts::PI).contains(&angle),
             "angle {angle} outside [0, pi] for {a:?} {b:?} {c:?}"
@@ -170,7 +171,7 @@ fn torsion_configuration(phi: f64) -> ([f64; 3], [f64; 3], [f64; 3], [f64; 3]) {
 fn torsion_returns_the_negated_iupac_dihedral() {
     // The crate builds its bond vectors as a1-a2, a2-a3, a3-a4, which are the
     // negatives of the conventional b1, b2, b3. The odd-order triple product
-    // flips sign while the even-order term does not, so `calc_torsion` returns
+    // flips sign while the even-order term does not, so `torsion_angle` returns
     // -phi where phi is the IUPAC dihedral.
     //
     // Entropy is invariant under reflection, so this does not affect any
@@ -180,7 +181,7 @@ fn torsion_returns_the_negated_iupac_dihedral() {
     for phi in [0.0_f64, 0.5, 1.0, 2.0, 3.0, -0.5, -2.5] {
         let (a1, a2, a3, a4) = torsion_configuration(phi);
         assert_close(
-            calc_torsion(a1, a2, a3, a4),
+            torsion_angle(a1, a2, a3, a4),
             -phi,
             1e-12,
             &format!("torsion at phi = {phi}"),
@@ -193,11 +194,11 @@ fn canonical_conformers_give_canonical_torsions() {
     // cis (syn) is 0, trans (anti) is pi, and the two gauche wells sit at
     // +/- pi/3 from cis in the IUPAC convention.
     let (a1, a2, a3, a4) = torsion_configuration(0.0);
-    assert_close(calc_torsion(a1, a2, a3, a4), 0.0, 1e-12, "cis");
+    assert_close(torsion_angle(a1, a2, a3, a4), 0.0, 1e-12, "cis");
 
     let (a1, a2, a3, a4) = torsion_configuration(std::f64::consts::PI);
     assert_close(
-        calc_torsion(a1, a2, a3, a4).abs(),
+        torsion_angle(a1, a2, a3, a4).abs(),
         std::f64::consts::PI,
         1e-12,
         "trans",
@@ -205,7 +206,7 @@ fn canonical_conformers_give_canonical_torsions() {
 
     let (a1, a2, a3, a4) = torsion_configuration(std::f64::consts::FRAC_PI_3);
     assert_close(
-        calc_torsion(a1, a2, a3, a4),
+        torsion_angle(a1, a2, a3, a4),
         -std::f64::consts::FRAC_PI_3,
         1e-12,
         "gauche+",
@@ -219,8 +220,8 @@ fn torsion_is_antisymmetric_under_reflection() {
         let (a1, a2, a3, a4) = torsion_configuration(phi);
         let mirror = |p: [f64; 3]| [p[0], -p[1], p[2]];
         assert_close(
-            calc_torsion(mirror(a1), mirror(a2), mirror(a3), mirror(a4)),
-            -calc_torsion(a1, a2, a3, a4),
+            torsion_angle(mirror(a1), mirror(a2), mirror(a3), mirror(a4)),
+            -torsion_angle(a1, a2, a3, a4),
             1e-12,
             &format!("reflected torsion at phi = {phi}"),
         );
@@ -233,28 +234,11 @@ fn torsions_lie_in_the_atan2_range() {
     for _ in 0..500 {
         let p = |rng: &mut common::Rng| [rng.normal(), rng.normal(), rng.normal()];
         let (a, b, c, d) = (p(&mut rng), p(&mut rng), p(&mut rng), p(&mut rng));
-        let torsion = calc_torsion(a, b, c, d);
+        let torsion = torsion_angle(a, b, c, d);
         assert!(
             torsion.is_finite() && torsion.abs() <= std::f64::consts::PI,
             "torsion {torsion} outside (-pi, pi]"
         );
-    }
-}
-
-#[test]
-fn cross_product_is_antisymmetric_and_orthogonal() {
-    let mut rng = common::Rng::new(43);
-    for _ in 0..200 {
-        let a = [rng.normal(), rng.normal(), rng.normal()];
-        let b = [rng.normal(), rng.normal(), rng.normal()];
-        let axb = cross_product(a, b);
-        let bxa = cross_product(b, a);
-        for k in 0..3 {
-            assert_close(axb[k], -bxa[k], 1e-12, "antisymmetry");
-        }
-        let dot_a: f64 = (0..3).map(|k| axb[k] * a[k]).sum();
-        let dot_b: f64 = (0..3).map(|k| axb[k] * b[k]).sum();
-        assert!(dot_a.abs() < 1e-12 && dot_b.abs() < 1e-12, "not orthogonal");
     }
 }
 
@@ -272,7 +256,7 @@ fn internal_coordinate_dispatch_follows_entry_length() {
         [1.0, 1.0, 1.0],
     ];
     let bat_list = vec![vec![0, 1], vec![0, 1, 2], vec![0, 1, 2, 3]];
-    let coordinates = calc_internal_coords(bat_list, vec![frame.clone()]);
+    let coordinates = internal_coordinates(&bat_list, std::slice::from_ref(&frame));
 
     assert_eq!(coordinates.len(), 1);
     assert_eq!(coordinates[0].len(), 3);
@@ -285,7 +269,7 @@ fn internal_coordinate_dispatch_follows_entry_length() {
     );
     assert_close(
         coordinates[0][2],
-        calc_torsion(frame[0], frame[1], frame[2], frame[3]),
+        torsion_angle(frame[0], frame[1], frame[2], frame[3]),
         1e-15,
         "torsion entry",
     );
