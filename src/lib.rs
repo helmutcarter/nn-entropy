@@ -1,9 +1,6 @@
 use kiddo::ImmutableKdTree;
 use kiddo::SquaredEuclidean;
-use rand_distr::{Distribution, Normal};
 use rayon::prelude::*;
-use std::fs::File;
-use std::io::ErrorKind;
 use std::num::NonZero;
 
 pub mod bat_library;
@@ -524,13 +521,6 @@ pub fn calc_joint_nn<const K: usize>(
     }
     Ok(distance_total)
 }
-// Helper function to generate Gaussian data for testing
-pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
-    let normal = Normal::new(mean, std_dev).unwrap();
-    let mut rng = rand::thread_rng();
-    (0..size).map(|_| normal.sample(&mut rng)).collect()
-}
-
 pub fn estimate_entropy_efficient(
     nn_distance: f64,
     reciprocal_n_frames: f64,
@@ -542,41 +532,6 @@ pub fn estimate_entropy_efficient(
     } else {
         nn_distance * reciprocal_n_frames + constant
     }
-}
-
-pub fn load_one_d_data(file_path: &str) -> Vec<Vec<f64>> {
-    let mut all_data: Vec<Vec<f64>> = Vec::new();
-    let file_result = File::open(file_path);
-    let file = match file_result {
-        Ok(file) => file,
-        Err(error) => match error.kind() {
-            ErrorKind::NotFound => match File::create("hello.txt") {
-                Ok(fc) => fc,
-                Err(e) => panic!("Problem creating the file: {e:?}"),
-            },
-            other_error => {
-                panic!("Problem opening the file: {other_error:?}");
-            }
-        },
-    };
-    let mut reader = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(file);
-
-    for result in reader.records() {
-        let mut internal_coordinate_data: Vec<f64> = Vec::new();
-        match result {
-            Ok(record) => {
-                for entry in record.iter() {
-                    let point: f64 = entry.parse().unwrap();
-                    internal_coordinate_data.push(point);
-                }
-            }
-            Err(e) => println!("Error reading record: {:?}", e),
-        }
-        all_data.push(internal_coordinate_data);
-    }
-    all_data
 }
 
 #[cfg(test)]

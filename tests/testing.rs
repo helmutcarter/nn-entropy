@@ -3,7 +3,6 @@ use nn_entropy::bat_library::geometry::{
     bond_angle, bond_length, internal_coordinates, torsion_angle,
 };
 use nn_entropy::*;
-use rand_distr::{Distribution, Normal};
 
 fn kl_constant(n_frames: usize, dimensions: usize) -> f64 {
     let volume = match dimensions {
@@ -335,14 +334,6 @@ fn test_unsupported_mie_order_is_invalid() {
     assert!(err.contains("unsupported MIE order"));
 }
 
-// Helper function to generate Guassian data
-pub fn generate_normal(mean: f64, std_dev: f64, size: usize) -> Vec<f64> {
-    let normal = Normal::new(mean, std_dev).unwrap();
-    let mut rng = rand::thread_rng();
-    (0..size).map(|_| normal.sample(&mut rng)).collect()
-}
-
-// Helper function to compare floating-point arrays with tolerance
 #[test]
 fn test_torsion_angle() {
     let a1: [f64; 3] = [70.73, -91.32219, -87.903145];
