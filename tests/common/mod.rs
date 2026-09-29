@@ -10,6 +10,8 @@
 
 use nn_entropy::CoordinateMetric;
 
+pub mod amber;
+
 /// Euler-Mascheroni constant, to the precision the crate itself uses.
 pub const EULER_MASCHERONI: f64 = 0.57721566490153;
 

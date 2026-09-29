@@ -13,6 +13,10 @@ struct Prmtop {
     natom: usize,
     masses: Vec<f64>,
     atom_types: Vec<String>,
+    /// Per-atom atomic numbers; empty when the topology predates ATOMIC_NUMBER.
+    atomic_numbers: Vec<i64>,
+    /// Per-atom residue labels; empty when RESIDUE_LABEL/POINTER are absent.
+    residue_labels: Vec<String>,
     bonds: Vec<(usize, usize)>,
 }
 
@@ -176,6 +180,48 @@ fn parse_prmtop_from_pointers(
         bond_no_h_tokens.len() / 3
     };
 
+    let atomic_numbers = match sections.get("ATOMIC_NUMBER") {
+        Some(sec) => sec
+            .1
+            .iter()
+            .take(natom)
+            .map(|s| s.parse::<i64>())
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
+
+    let residue_labels = match (
+        sections.get("RESIDUE_LABEL"),
+        sections.get("RESIDUE_POINTER"),
+    ) {
+        (Some(labels), Some(pointers)) => {
+            let starts = pointers
+                .1
+                .iter()
+                .map(|s| s.parse::<usize>())
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if starts.len() != labels.1.len() {
+                return Err("RESIDUE_LABEL and RESIDUE_POINTER lengths differ".into());
+            }
+            let mut per_atom = vec![String::new(); natom];
+            for (residue, &start) in starts.iter().enumerate() {
+                // RESIDUE_POINTER is one-based; a residue runs to the next start.
+                let first = start
+                    .checked_sub(1)
+                    .ok_or("RESIDUE_POINTER entry of zero")?;
+                let end = starts.get(residue + 1).map_or(natom, |&next| next - 1);
+                if first > end || end > natom {
+                    return Err("RESIDUE_POINTER is out of order or out of range".into());
+                }
+                for label in &mut per_atom[first..end] {
+                    label.clone_from(&labels.1[residue]);
+                }
+            }
+            per_atom
+        }
+        _ => Vec::new(),
+    };
+
     let mut bonds = Vec::new();
     for i in 0..bond_h_count {
         let a = bond_h_tokens[i * 3].parse::<i64>()?;
@@ -196,6 +242,8 @@ fn parse_prmtop_from_pointers(
         natom,
         masses,
         atom_types,
+        atomic_numbers,
+        residue_labels,
         bonds,
     })
 }
@@ -220,6 +268,8 @@ struct NetcdfVar {
 #[allow(dead_code)]
 struct NetcdfReader {
     file: File,
+    /// Atom count the topology declares; the trajectory must match it.
+    expected_atoms: usize,
     version: u8,
     numrecs: u64,
     dims: Vec<NetcdfDim>,
@@ -227,8 +277,11 @@ struct NetcdfReader {
     record_size: u64,
 }
 
+/// NetCDF `numrecs` value for a file still being written.
+const STREAMING_NUMRECS: u32 = u32::MAX;
+
 impl NetcdfReader {
-    fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path, expected_atoms: usize) -> Result<Self> {
         let mut file = File::open(path)?;
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
@@ -239,15 +292,34 @@ impl NetcdfReader {
         if version != 1 && version != 2 {
             return Err("unsupported NetCDF version".into());
         }
-        let numrecs = Self::read_u32(&mut file)? as u64;
+        let declared_records = Self::read_u32(&mut file)?;
 
         let dims = Self::read_dim_list(&mut file)?;
         Self::skip_attr_list(&mut file)?;
         let vars = Self::read_var_list(&mut file, version, &dims)?;
-        let record_size = vars.iter().filter(|v| v.is_record).map(|v| v.vsize).sum();
+        let record_size: u64 = vars.iter().filter(|v| v.is_record).map(|v| v.vsize).sum();
+
+        // 0xFFFFFFFF marks a streaming (unfinalized) file whose record count
+        // was never written back; count the complete records actually present.
+        let numrecs = if declared_records == STREAMING_NUMRECS {
+            let first_record = vars
+                .iter()
+                .filter(|v| v.is_record)
+                .map(|v| v.begin)
+                .min()
+                .ok_or("streaming NetCDF file has no record variables")?;
+            if record_size == 0 {
+                return Err("streaming NetCDF file has zero-sized records".into());
+            }
+            let file_len = file.metadata()?.len();
+            file_len.saturating_sub(first_record) / record_size
+        } else {
+            declared_records as u64
+        };
 
         Ok(NetcdfReader {
             file,
+            expected_atoms,
             version,
             numrecs,
             dims,
@@ -268,139 +340,114 @@ impl NetcdfReader {
         Ok(self.coordinates_var()?.vartype)
     }
 
-    fn read_coordinates_f64(
+    /// Read `atoms` (sorted, zero-based indices into the file's atom
+    /// dimension) from the first `frames` frames, decoding each value with
+    /// `decode`. Only the span from the first to the last requested atom is
+    /// read, so a solute stored ahead of its solvent costs no more than before.
+    fn read_coordinates<T: Copy + Default>(
         &mut self,
         frames: usize,
-        atom_num: usize,
-    ) -> Result<Vec<Vec<[f64; 3]>>> {
+        atoms: &[usize],
+        bytes_per_value: usize,
+        decode: impl Fn(&[u8]) -> T,
+    ) -> Result<Vec<Vec<[T; 3]>>> {
         let var = self.coordinates_var()?;
-
         let dims: Vec<u64> = var.dim_ids.iter().map(|&i| self.dims[i].len).collect();
-        if dims.len() < 2 {
-            return Err("coordinates variable has too few dimensions".into());
-        }
 
         let (frame_count, atom_dim, spatial_dim) = if var.is_record {
-            let total_frames = if self.numrecs == u64::MAX {
-                frames as u64
-            } else {
-                self.numrecs
-            };
-            let frame_count = frames.min(total_frames as usize);
-            let atom_dim = dims[1];
-            let spatial_dim = dims[2];
-            (frame_count, atom_dim, spatial_dim)
+            if dims.len() != 3 {
+                return Err("coordinates variable must be (frame, atom, spatial)".into());
+            }
+            (frames.min(self.numrecs as usize), dims[1], dims[2])
         } else {
-            let atom_dim = dims[0];
-            let spatial_dim = dims[1];
-            (1usize, atom_dim, spatial_dim)
+            if dims.len() != 2 {
+                return Err("coordinates variable must be (atom, spatial)".into());
+            }
+            (1usize, dims[0], dims[1])
         };
-
         if spatial_dim != 3 {
             return Err("coordinates spatial dimension is not 3".into());
         }
-        if atom_num as u64 > atom_dim {
-            return Err("requested atom count exceeds file atom dimension".into());
+        if atom_dim != self.expected_atoms as u64 {
+            return Err(format!(
+                "trajectory has {atom_dim} atoms but the topology has {}",
+                self.expected_atoms
+            )
+            .into());
+        }
+        let (Some(&first), Some(&last)) = (atoms.first(), atoms.last()) else {
+            return Ok(vec![Vec::new(); frame_count]);
+        };
+        debug_assert!(atoms.windows(2).all(|w| w[0] < w[1]));
+        if last as u64 >= atom_dim {
+            return Err(
+                format!("topology selects atom {last} but the trajectory has {atom_dim}").into(),
+            );
         }
 
-        let bytes_per = match var.vartype {
-            5 => 4u64, // NC_FLOAT
-            6 => 8u64, // NC_DOUBLE
-            _ => return Err("unsupported coordinates data type".into()),
-        };
-        let _ = bytes_per;
-
+        let atom_bytes = 3 * bytes_per_value;
+        let mut span = vec![0u8; (last - first + 1) * atom_bytes];
         let mut frames_out = Vec::with_capacity(frame_count);
         for frame_idx in 0..frame_count {
-            let offset = if var.is_record {
+            let frame_start = if var.is_record {
                 var.begin + (frame_idx as u64) * self.record_size
             } else {
                 var.begin
             };
-            self.file.seek(SeekFrom::Start(offset))?;
+            self.file
+                .seek(SeekFrom::Start(frame_start + (first * atom_bytes) as u64))?;
+            self.file.read_exact(&mut span)?;
 
-            let mut atoms = Vec::with_capacity(atom_num);
-            for _ in 0..atom_num {
-                let x = Self::read_num(&mut self.file, var.vartype)?;
-                let y = Self::read_num(&mut self.file, var.vartype)?;
-                let z = Self::read_num(&mut self.file, var.vartype)?;
-                atoms.push([x, y, z]);
-            }
-            frames_out.push(atoms);
-
-            let var_end = offset + var.vsize;
-            self.file.seek(SeekFrom::Start(var_end))?;
+            let frame = atoms
+                .iter()
+                .map(|&atom| {
+                    let at = (atom - first) * atom_bytes;
+                    let mut xyz = [T::default(); 3];
+                    for (axis, value) in xyz.iter_mut().enumerate() {
+                        let offset = at + axis * bytes_per_value;
+                        *value = decode(&span[offset..offset + bytes_per_value]);
+                    }
+                    xyz
+                })
+                .collect();
+            frames_out.push(frame);
         }
-
         Ok(frames_out)
+    }
+
+    fn read_coordinates_f64(
+        &mut self,
+        frames: usize,
+        atoms: &[usize],
+    ) -> Result<Vec<Vec<[f64; 3]>>> {
+        match self.coordinates_vartype()? {
+            5 => self.read_coordinates(frames, atoms, 4, |b| {
+                f32::from_be_bytes(b.try_into().unwrap()) as f64
+            }),
+            6 => self.read_coordinates(frames, atoms, 8, |b| {
+                f64::from_be_bytes(b.try_into().unwrap())
+            }),
+            _ => Err("unsupported coordinates data type".into()),
+        }
     }
 
     fn read_coordinates_f32(
         &mut self,
         frames: usize,
-        atom_num: usize,
+        atoms: &[usize],
     ) -> Result<Vec<Vec<[f32; 3]>>> {
-        let var = self.coordinates_var()?;
-        if var.vartype != 5 {
+        if self.coordinates_vartype()? != 5 {
             return Err("coordinates variable is not float".into());
         }
-
-        let dims: Vec<u64> = var.dim_ids.iter().map(|&i| self.dims[i].len).collect();
-        if dims.len() < 2 {
-            return Err("coordinates variable has too few dimensions".into());
-        }
-
-        let (frame_count, atom_dim, spatial_dim) = if var.is_record {
-            let total_frames = if self.numrecs == u64::MAX {
-                frames as u64
-            } else {
-                self.numrecs
-            };
-            let frame_count = frames.min(total_frames as usize);
-            let atom_dim = dims[1];
-            let spatial_dim = dims[2];
-            (frame_count, atom_dim, spatial_dim)
-        } else {
-            let atom_dim = dims[0];
-            let spatial_dim = dims[1];
-            (1usize, atom_dim, spatial_dim)
-        };
-
-        if spatial_dim != 3 {
-            return Err("coordinates spatial dimension is not 3".into());
-        }
-        if atom_num as u64 > atom_dim {
-            return Err("requested atom count exceeds file atom dimension".into());
-        }
-
-        let mut frames_out = Vec::with_capacity(frame_count);
-        for frame_idx in 0..frame_count {
-            let offset = if var.is_record {
-                var.begin + (frame_idx as u64) * self.record_size
-            } else {
-                var.begin
-            };
-            self.file.seek(SeekFrom::Start(offset))?;
-
-            let mut atoms = Vec::with_capacity(atom_num);
-            for _ in 0..atom_num {
-                let x = Self::read_f32(&mut self.file)?;
-                let y = Self::read_f32(&mut self.file)?;
-                let z = Self::read_f32(&mut self.file)?;
-                atoms.push([x, y, z]);
-            }
-            frames_out.push(atoms);
-
-            let var_end = offset + var.vsize;
-            self.file.seek(SeekFrom::Start(var_end))?;
-        }
-
-        Ok(frames_out)
+        self.read_coordinates(frames, atoms, 4, |b| {
+            f32::from_be_bytes(b.try_into().unwrap())
+        })
     }
 
     fn read_dim_list(file: &mut File) -> Result<Vec<NetcdfDim>> {
         let tag = Self::read_u32(file)?;
         if tag == 0 {
+            Self::read_absent_count(file)?;
             return Ok(Vec::new());
         }
         if tag != 10 {
@@ -419,6 +466,7 @@ impl NetcdfReader {
     fn skip_attr_list(file: &mut File) -> Result<()> {
         let tag = Self::read_u32(file)?;
         if tag == 0 {
+            Self::read_absent_count(file)?;
             return Ok(());
         }
         if tag != 12 {
@@ -439,6 +487,7 @@ impl NetcdfReader {
     fn read_var_list(file: &mut File, version: u8, dims: &[NetcdfDim]) -> Result<Vec<NetcdfVar>> {
         let tag = Self::read_u32(file)?;
         if tag == 0 {
+            Self::read_absent_count(file)?;
             return Ok(Vec::new());
         }
         if tag != 11 {
@@ -454,14 +503,9 @@ impl NetcdfReader {
                 dim_ids.push(Self::read_u32(file)? as usize);
             }
             Self::skip_attr_list(file)?;
-            let mut vartype = Self::read_u32(file)?;
-            if vartype == 0 {
-                let possible = Self::read_u32(file)?;
-                if (1..=6).contains(&possible) {
-                    vartype = possible;
-                } else {
-                    return Err("unexpected NetCDF variable type".into());
-                }
+            let vartype = Self::read_u32(file)?;
+            if !(1..=6).contains(&vartype) {
+                return Err("unexpected NetCDF variable type".into());
             }
             let vsize = Self::read_u32(file)? as u64;
             let begin = if version == 1 {
@@ -486,18 +530,12 @@ impl NetcdfReader {
         Ok(vars)
     }
 
-    fn read_num(file: &mut File, vartype: u32) -> Result<f64> {
-        match vartype {
-            5 => {
-                let v = Self::read_f32(file)?;
-                Ok(v as f64)
-            }
-            6 => {
-                let v = Self::read_f64(file)?;
-                Ok(v)
-            }
-            _ => Err("unsupported numeric type".into()),
+    /// An absent list is encoded as ZERO ZERO; consume and check the count.
+    fn read_absent_count(file: &mut File) -> Result<()> {
+        if Self::read_u32(file)? != 0 {
+            return Err("malformed NetCDF header: absent list has a non-zero count".into());
         }
+        Ok(())
     }
 
     fn read_u32(file: &mut File) -> Result<u32> {
@@ -510,18 +548,6 @@ impl NetcdfReader {
         let mut buf = [0u8; 8];
         file.read_exact(&mut buf)?;
         Ok(u64::from_be_bytes(buf))
-    }
-
-    fn read_f32(file: &mut File) -> Result<f32> {
-        let mut buf = [0u8; 4];
-        file.read_exact(&mut buf)?;
-        Ok(f32::from_be_bytes(buf))
-    }
-
-    fn read_f64(file: &mut File) -> Result<f64> {
-        let mut buf = [0u8; 8];
-        file.read_exact(&mut buf)?;
-        Ok(f64::from_be_bytes(buf))
     }
 
     fn read_string(file: &mut File) -> Result<String> {
@@ -860,18 +886,57 @@ fn int_c_f32(bat_list: &[Vec<usize>], traj: &[Vec<[f32; 3]>]) -> Vec<Vec<f64>> {
 }
 
 pub struct InternalCoordinates {
+    /// BAT entries, indexing into `atoms` (not into the topology).
     bat_list: Vec<Vec<usize>>,
-    atom_num: usize,
+    /// Topology indices of the atoms the BAT list uses, sorted ascending.
+    atoms: Vec<usize>,
+    /// Total atom count declared by the topology.
+    natom: usize,
     pub dim: usize,
     pub int_coords: Vec<Vec<f64>>,
     pub pairs: Vec<(usize, usize)>,
 }
 
+/// Amber atom types that belong only to water models (including the extra
+/// point of four-point models such as TIP4P-Ew and OPC).
+const WATER_ATOM_TYPES: [&str; 4] = ["OW", "HW", "EP", "EPW"];
+
+/// Residue names used for water by Amber, CHARMM and GROMACS topologies.
+const WATER_RESIDUES: [&str; 16] = [
+    "WAT", "HOH", "H2O", "SOL", "TIP3", "TP3", "T3P", "TIP4", "TP4", "T4P", "T4E", "TIP5", "TP5",
+    "SPC", "SPCE", "OPC",
+];
+
+/// Whether atom `index` is excluded before molecules are assembled: water, by
+/// type or residue name, and massless virtual sites, which carry no degrees of
+/// freedom of their own.
+fn is_excluded(prmtop: &Prmtop, index: usize) -> bool {
+    let atom_type = prmtop.atom_types[index].trim();
+    if WATER_ATOM_TYPES.contains(&atom_type) {
+        return true;
+    }
+    if let Some(label) = prmtop.residue_labels.get(index) {
+        let label = label.trim().to_ascii_uppercase();
+        if WATER_RESIDUES.contains(&label.as_str()) {
+            return true;
+        }
+    }
+    let massless = prmtop.masses[index] <= 0.0;
+    let no_element = prmtop.atomic_numbers.get(index) == Some(&0);
+    massless || no_element
+}
+
 impl InternalCoordinates {
     pub fn new(top: &Path) -> Result<Self> {
         let prmtop = parse_prmtop(top)?;
+        if prmtop.masses.len() != prmtop.natom || prmtop.atom_types.len() != prmtop.natom {
+            return Err("topology MASS or atom type section is shorter than NATOM".into());
+        }
         let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); prmtop.natom];
         for (a, b) in prmtop.bonds.iter().copied() {
+            if a >= prmtop.natom || b >= prmtop.natom {
+                return Err(format!("bond ({a}, {b}) references an atom beyond NATOM").into());
+            }
             adjacency[a].push(b);
             adjacency[b].push(a);
         }
@@ -880,7 +945,7 @@ impl InternalCoordinates {
         let mut hydrogens = HashSet::new();
         for (i, typ) in prmtop.atom_types.iter().enumerate() {
             let t = typ.trim();
-            if t == "HW" || t == "OW" || t == "EP" {
+            if is_excluded(&prmtop, i) {
                 molecule_mask[i] = false;
             }
             if (t.starts_with('H') || t.starts_with('h')) && t != "HW" {
@@ -890,7 +955,7 @@ impl InternalCoordinates {
 
         let mut visited = vec![false; prmtop.natom];
         let mut bat_list = Vec::new();
-        let mut atom_num = 0usize;
+        let mut atoms = Vec::new();
         for i in 0..prmtop.natom {
             if !molecule_mask[i] || visited[i] {
                 continue;
@@ -908,19 +973,48 @@ impl InternalCoordinates {
                     }
                 }
             }
-            atom_num += fragment.len();
-            bat_list.extend(build_bat_list(
-                &fragment,
-                &adjacency,
-                &hydrogens,
-                &prmtop.masses,
-            )?);
+
+            match fragment.len() {
+                // A lone atom (a monatomic ion, say) has no internal
+                // coordinates at all.
+                1 => continue,
+                // A diatomic has a single internal coordinate, its bond, which
+                // is kept under the same heavy-atom rule as every other bond.
+                2 => {
+                    let (a, b) = (fragment[0].min(fragment[1]), fragment[0].max(fragment[1]));
+                    if !hydrogens.contains(&a) && !hydrogens.contains(&b) {
+                        bat_list.push(vec![a, b]);
+                    }
+                }
+                _ => bat_list.extend(build_bat_list(
+                    &fragment,
+                    &adjacency,
+                    &hydrogens,
+                    &prmtop.masses,
+                )?),
+            }
+            atoms.extend(fragment);
+        }
+
+        // The trajectory reader gathers exactly `atoms`, in ascending order, so
+        // rewrite every BAT entry to index that gathered buffer.
+        atoms.sort_unstable();
+        let mut local = vec![usize::MAX; prmtop.natom];
+        for (position, &atom) in atoms.iter().enumerate() {
+            local[atom] = position;
+        }
+        for entry in bat_list.iter_mut() {
+            for atom in entry.iter_mut() {
+                *atom = local[*atom];
+                debug_assert_ne!(*atom, usize::MAX, "BAT entry uses an unselected atom");
+            }
         }
 
         let dim = bat_list.len();
         Ok(InternalCoordinates {
             bat_list,
-            atom_num,
+            atoms,
+            natom: prmtop.natom,
             dim,
             int_coords: Vec::new(),
             pairs: Vec::new(),
@@ -933,7 +1027,7 @@ impl InternalCoordinates {
         frames: usize,
         torsions_only: bool,
     ) -> Result<()> {
-        let mut reader = NetcdfReader::open(traj)?;
+        let mut reader = NetcdfReader::open(traj, self.natom)?;
         let vartype = reader.coordinates_vartype()?;
         if torsions_only {
             self.bat_list = self
@@ -945,10 +1039,10 @@ impl InternalCoordinates {
             self.dim = self.bat_list.len();
         }
         if vartype == 5 {
-            let coords = reader.read_coordinates_f32(frames, self.atom_num)?;
+            let coords = reader.read_coordinates_f32(frames, &self.atoms)?;
             self.int_coords = int_c_f32(&self.bat_list, &coords);
         } else {
-            let coords = reader.read_coordinates_f64(frames, self.atom_num)?;
+            let coords = reader.read_coordinates_f64(frames, &self.atoms)?;
             self.int_coords = int_c(&self.bat_list, &coords);
         }
         Ok(())
