@@ -20,6 +20,10 @@
 //!   and of pairs (up to sets of four), combined by a truncated expansion.
 //!   Makes no assumption about the shape of any distribution, but the sum of
 //!   many pairwise terms is noisy.
+//! - **Split**, [`split::estimate_split_entropy`]: soft torsions (about
+//!   rotatable bonds) by a nearest-neighbor estimate, the stiff coordinates by
+//!   a Gaussian, plus a coupling term; for molecules with several coupled
+//!   rotatable bonds.
 //! - **Quasi-harmonic (QH)**, the same function as BQH: a Gaussian fit to
 //!   every coordinate. Fast, but overestimates the entropy of multiwell
 //!   torsions.
@@ -93,6 +97,8 @@
 //!   and the bond-angle-torsion coordinates, with the options in
 //!   [`bat_library::CoordinateOptions`].
 //! - [`quasi_harmonic`]: the QH and BQH estimators.
+//! - [`split`]: the split (soft/hard) estimator, and [`basins`]: basin
+//!   detection for periodic coordinates.
 //! - [`legacy`]: the reproduction of the original Python implementation.
 //! - [`pyo3_api`]: the Python extension module.
 
@@ -103,10 +109,12 @@ use kiddo::SquaredEuclidean;
 use rayon::prelude::*;
 use std::num::NonZero;
 
+pub mod basins;
 pub mod bat_library;
 pub mod legacy;
 pub mod pyo3_api;
 pub mod quasi_harmonic;
+pub mod split;
 
 /// Metric used for one internal-coordinate dimension.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,23 +203,44 @@ fn validate_metrics(metrics: &[CoordinateMetric], dimensions: usize) -> Result<(
     Ok(())
 }
 
+/// ln of the volume of the unit ball in `dimensions` dimensions,
+/// pi^(d/2) / Gamma(d/2 + 1). Dimensions 1 to 4 keep their literal forms so the
+/// MIE terms are unchanged to the last bit; above that, Gamma is evaluated
+/// exactly at its integer or half-integer argument.
+pub fn log_unit_ball_volume(dimensions: usize) -> f64 {
+    use std::f64::consts::PI;
+    match dimensions {
+        1 => 2.0_f64.ln(),
+        2 => PI.ln(),
+        3 => (4.0 * PI / 3.0).ln(),
+        4 => (PI.powi(2) / 2.0).ln(),
+        d => {
+            let ln_factorial = |n: usize| (2..=n).map(|i| (i as f64).ln()).sum::<f64>();
+            let ln_gamma = if d % 2 == 0 {
+                // Gamma(k + 1) = k!, k = d/2.
+                ln_factorial(d / 2)
+            } else {
+                // Gamma(m + 1/2) = (2m)! sqrt(pi) / (4^m m!), m = (d + 1)/2.
+                let m = d.div_ceil(2);
+                ln_factorial(2 * m) + 0.5 * PI.ln() - m as f64 * 4.0_f64.ln() - ln_factorial(m)
+            };
+            0.5 * d as f64 * PI.ln() - ln_gamma
+        }
+    }
+}
+
 fn entropy_constant_with_convention(
     n_frames: usize,
     dimensions: usize,
     convention: FiniteSampleConstant,
     theiler_window: usize,
 ) -> Result<f64, String> {
-    let log_unit_ball_volume = match dimensions {
-        1 => 2.0_f64.ln(),
-        2 => std::f64::consts::PI.ln(),
-        3 => (4.0 * std::f64::consts::PI / 3.0).ln(),
-        4 => (std::f64::consts::PI.powi(2) / 2.0).ln(),
-        _ => {
-            return Err(format!(
-                "unsupported nearest-neighbor dimension {dimensions}"
-            ));
-        }
-    };
+    if dimensions == 0 {
+        return Err(format!(
+            "unsupported nearest-neighbor dimension {dimensions}"
+        ));
+    }
+    let log_unit_ball_volume = log_unit_ball_volume(dimensions);
     validate_theiler_window(n_frames, theiler_window)?;
     // The reference Python implementation (NN_entropy_calc.py) hard-codes
     // gamma as 0.57721566490153, truncated to 14 decimal places. Full double
@@ -611,27 +640,6 @@ fn point_cmp<const K: usize>(left: &[f64; K], right: &[f64; K]) -> std::cmp::Ord
     std::cmp::Ordering::Equal
 }
 
-fn periodic_query_images<const K: usize>(
-    point: [f64; K],
-    metrics: [CoordinateMetric; K],
-) -> Vec<[f64; K]> {
-    let mut images = vec![point];
-    for dimension in 0..K {
-        if let CoordinateMetric::Periodic { period } = metrics[dimension] {
-            let existing = images.clone();
-            for image in existing {
-                let mut below = image;
-                below[dimension] -= period;
-                images.push(below);
-                let mut above = image;
-                above[dimension] += period;
-                images.push(above);
-            }
-        }
-    }
-    images
-}
-
 /// Sum over frames of ln(distance to the nearest other frame) in the K-dimensional
 /// joint space of `coordinates`, using each coordinate's metric.
 pub fn calc_joint_nn<const K: usize>(
@@ -717,6 +725,12 @@ pub fn calc_joint_nn_with_window<const K: usize>(
     // its window are ineligible, at most 2w + 1 of them, so the nearest 2w + 2
     // positions always contain the nearest eligible one if it exists.
     let max_query_count = unique_points.len().min(2 * theiler_window + 2);
+    let periodic_dimensions: Vec<(usize, f64)> = (0..K)
+        .filter_map(|dimension| match metrics[dimension] {
+            CoordinateMetric::Periodic { period } => Some((dimension, period)),
+            CoordinateMetric::Linear => None,
+        })
+        .collect();
     let kdtree: ImmutableKdTree<f64, K> = ImmutableKdTree::new_from_slice(&unique_points);
     let mut distance_total: f64 = 0.0;
     for (frame, point) in points.into_iter().enumerate() {
@@ -726,28 +740,52 @@ pub fn calc_joint_nn_with_window<const K: usize>(
             candidate != self_index
                 && (first + theiler_window < frame || last > frame + theiler_window)
         };
-        let result = periodic_query_images(point, metrics)
-            .into_iter()
-            .filter_map(|image| {
-                let mut query_count = max_query_count.min(2);
-                loop {
-                    let neighbors = kdtree.nearest_n::<SquaredEuclidean>(
-                        &image,
-                        NonZero::new(query_count).unwrap(),
-                    );
-                    let nearest_eligible = neighbors
-                        .iter()
-                        .filter(|neighbor| is_eligible(neighbor.item as usize))
-                        .map(|neighbor| neighbor.distance)
-                        .min_by(f64::total_cmp);
-                    if nearest_eligible.is_some() || query_count == max_query_count {
-                        return nearest_eligible;
-                    }
-                    query_count = (query_count * 2).min(max_query_count);
+        // Squared distance from `image` to its nearest eligible frame.
+        let query = |image: &[f64; K]| {
+            let mut query_count = max_query_count.min(2);
+            loop {
+                let neighbors =
+                    kdtree.nearest_n::<SquaredEuclidean>(image, NonZero::new(query_count).unwrap());
+                let nearest_eligible = neighbors
+                    .iter()
+                    .filter(|neighbor| is_eligible(neighbor.item as usize))
+                    .map(|neighbor| neighbor.distance)
+                    .min_by(f64::total_cmp);
+                if nearest_eligible.is_some() || query_count == max_query_count {
+                    return nearest_eligible;
                 }
-            })
-            .min_by(f64::total_cmp)
-            .ok_or_else(|| {
+                query_count = (query_count * 2).min(max_query_count);
+            }
+        };
+        // The unshifted point first; its distance bounds the rest. A periodic
+        // image shifted by -P in dimension k is at least P - x_k from every
+        // canonical point (all lie in [0, P)), one shifted by +P at least x_k,
+        // so a combination of shifts whose summed bound already reaches the
+        // best distance cannot improve it and is skipped. The minimum is the
+        // same as over every image.
+        let mut best = query(&point);
+        let mut stack = vec![(0usize, point, 0.0_f64, false)];
+        while let Some((depth, image, bound, shifted)) = stack.pop() {
+            if best.is_some_and(|best| bound >= best) {
+                continue;
+            }
+            if depth == periodic_dimensions.len() {
+                if shifted && let Some(distance) = query(&image) {
+                    best = Some(best.map_or(distance, |best| best.min(distance)));
+                }
+                continue;
+            }
+            let (dimension, period) = periodic_dimensions[depth];
+            let x = point[dimension];
+            stack.push((depth + 1, image, bound, shifted));
+            let mut below = image;
+            below[dimension] -= period;
+            stack.push((depth + 1, below, bound + (period - x).powi(2), true));
+            let mut above = image;
+            above[dimension] += period;
+            stack.push((depth + 1, above, bound + x.powi(2), true));
+        }
+        let result = best.ok_or_else(|| {
                 format!(
                     "frame {frame} has no distinct {K}D neighbor outside Theiler window {theiler_window}"
                 )
@@ -756,6 +794,66 @@ pub fn calc_joint_nn_with_window<const K: usize>(
     }
     Ok(distance_total)
 }
+/// Largest number of coordinates for a joint nearest-neighbor estimate. The
+/// estimator's bias grows quickly with dimension; beyond this, use the MIE.
+pub const MAX_JOINT_DIMENSION: usize = 8;
+
+/// [`calc_joint_nn_with_window`] with the dimension chosen at run time, from 1
+/// to [`MAX_JOINT_DIMENSION`].
+pub fn calc_joint_nn_dynamic(
+    coordinates: &[&[f64]],
+    metrics: &[CoordinateMetric],
+    theiler_window: usize,
+) -> Result<f64, String> {
+    if coordinates.len() != metrics.len() {
+        return Err(format!(
+            "received {} coordinate metrics for {} coordinates",
+            metrics.len(),
+            coordinates.len()
+        ));
+    }
+    macro_rules! dispatch {
+        ($($k:literal)*) => {
+            match coordinates.len() {
+                $($k => calc_joint_nn_with_window::<$k>(
+                    coordinates.try_into().unwrap(),
+                    metrics.try_into().unwrap(),
+                    theiler_window,
+                ),)*
+                d => Err(format!(
+                    "a joint nearest-neighbor estimate supports 1 to {MAX_JOINT_DIMENSION} coordinates, got {d}; use the mutual information expansion instead"
+                )),
+            }
+        };
+    }
+    dispatch!(1 2 3 4 5 6 7 8)
+}
+
+/// Joint nearest-neighbor (Kozachenko-Leonenko) entropy of all the coordinates
+/// in `one_d_data` at once, with no expansion: up to [`MAX_JOINT_DIMENSION`]
+/// coordinates. For one coordinate it equals [`calculate_entropy`] at order 1.
+pub fn estimate_joint_entropy(
+    one_d_data: &[Vec<f64>],
+    frames_end: usize,
+    options: &EntropyOptions,
+) -> Result<f64, String> {
+    let (one_d_data, metrics) = resolve_input(one_d_data, frames_end, options)?;
+    let dimensions = one_d_data.len();
+    let columns: Vec<&[f64]> = one_d_data.iter().map(Vec::as_slice).collect();
+    let distances = calc_joint_nn_dynamic(&columns, &metrics, options.theiler_window)?;
+    let constant = entropy_constant_with_convention(
+        frames_end,
+        dimensions,
+        options.constant,
+        options.theiler_window,
+    )?;
+    Ok(estimate_entropy_efficient(
+        distances * dimensions as f64,
+        (frames_end as f64).recip(),
+        constant,
+    ))
+}
+
 /// `nn_distance * reciprocal_n_frames + constant`, as a fused multiply-add when
 /// the `fma` feature is enabled: a nearest-neighbor entropy from the sum over
 /// frames of ln(nearest-neighbor distance), already multiplied by the

@@ -66,3 +66,16 @@ println!("QH {} BQH {}", entropy.quasi_harmonic, entropy.boltzmann_quasi_harmoni
 ```
 
 The result also carries the terms the totals are built from: `first_order_gaussian`, `first_order_boltzmann` and `correlation`. `estimate_coordinate_quasi_harmonic_entropy` takes the same arguments and returns each coordinate's share of every one of them.
+
+The split estimator takes the soft set from the coordinates' topology:
+
+```rust
+use nn_entropy::split::{SoftSelection, SplitOptions, estimate_split_entropy};
+
+let soft = internal.soft_torsions(); // primary torsions about rotatable bonds
+let split = SplitOptions::new(SoftSelection::Indices(&soft)); // validated defaults
+let result = estimate_split_entropy(&data, frames, &split, &options)?;
+println!("{} = {} + {} + {}", result.total, result.soft, result.hard, result.coupling);
+```
+
+`SoftSelection::Detect` finds soft coordinates from their basins (`basins::detect_basins`), and `estimate_joint_entropy` gives a joint nearest-neighbor estimate over up to 8 coordinates.

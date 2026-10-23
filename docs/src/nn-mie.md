@@ -12,6 +12,10 @@ In Rust these are the fields of `EntropyOptions`. The CLI and Python have matchi
 - `constant`: `FiniteSampleConstant::Asymptotic` (the default) or `FiniteSampleConstant::Exact`.
 - `theiler_window`: frames j with |i - j| <= `theiler_window` are never frame i's nearest neighbor. The default, 0, excludes only frame i itself.
 
+## Joint estimate
+
+The MIE builds the entropy from estimates in one to four dimensions. A single nearest-neighbor estimate over a whole set of coordinates is also available, with no expansion: `estimate_joint_entropy` in Rust, for up to 8 coordinates (`MAX_JOINT_DIMENSION`), and the split estimator's `--soft-estimator joint`. It has no truncation error, but its bias grows quickly with the number of coordinates, so it suits small sets such as the soft torsions of a ligand. On a periodic box the nearest-neighbor search skips the periodic images that cannot hold a closer neighbor, which keeps it fast in higher dimensions.
+
 ## Notes
 
 - The default second-order mutual-information expansion is a truncation and can omit higher-order correlations.

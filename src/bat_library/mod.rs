@@ -881,6 +881,11 @@ pub struct InternalCoordinates {
     /// Whether `calculate_internal_coords` dropped every coordinate but the
     /// torsions.
     torsions_only: bool,
+    /// Solute bonds that lie on a ring, as sorted pairs of local indices.
+    ring_bonds: Bonds,
+    /// Non-ring bonds one end of which carries only two or more terminal atoms
+    /// of one element (CH3, NH3+, CF3, ...), as sorted pairs of local indices.
+    symmetric_rotor_bonds: Bonds,
     /// Number of coordinates.
     pub dim: usize,
     /// Coordinate values, `int_coords[frame][coordinate]`, filled by
@@ -1020,6 +1025,14 @@ impl InternalCoordinates {
             }
         }
 
+        let (ring_bonds, symmetric_rotor_bonds) =
+            bond_topology(&prmtop, &adjacency, &molecule_mask);
+        let to_local = |bonds: Bonds| -> Bonds {
+            bonds
+                .into_iter()
+                .map(|(a, b)| (local[a].min(local[b]), local[a].max(local[b])))
+                .collect()
+        };
         let dim = bat_list.len();
         Ok(InternalCoordinates {
             bat_list,
@@ -1027,6 +1040,8 @@ impl InternalCoordinates {
             natom: prmtop.natom,
             options,
             torsions_only: false,
+            ring_bonds: to_local(ring_bonds),
+            symmetric_rotor_bonds: to_local(symmetric_rotor_bonds),
             dim,
             int_coords: Vec::new(),
             pairs: Vec::new(),
@@ -1139,6 +1154,45 @@ impl InternalCoordinates {
         Ok((0..self.dim)
             .map(|coordinate| selected.iter().map(|frame| frame[coordinate]).collect())
             .collect())
+    }
+
+    /// The primary torsion about each rotatable bond: for every non-ring
+    /// central bond, the first torsion about it in coordinate order. With phase
+    /// angles these are exactly the coordinates of kind
+    /// [`CoordinateKind::Torsion`] off rings; the split estimator's default
+    /// soft set.
+    pub fn soft_torsions(&self) -> Vec<usize> {
+        let mut seen = HashSet::new();
+        self.bat_list
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.len() == 4)
+            .filter(|(_, entry)| seen.insert(central_bond(entry)))
+            .filter(|(_, entry)| !self.ring_bonds.contains(&central_bond(entry)))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The soft torsions about symmetric rotors such as methyl groups: their
+    /// basins are equivalent, so they define no conformational states.
+    pub fn symmetric_rotor_torsions(&self) -> Vec<usize> {
+        self.soft_torsions()
+            .into_iter()
+            .filter(|&i| {
+                self.symmetric_rotor_bonds
+                    .contains(&central_bond(&self.bat_list[i]))
+            })
+            .collect()
+    }
+
+    /// Torsions about bonds that lie on a ring.
+    pub fn ring_torsions(&self) -> Vec<usize> {
+        self.bat_list
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.len() == 4 && self.ring_bonds.contains(&central_bond(entry)))
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// The kind of each coordinate, with the reference torsion of each phase
@@ -1261,6 +1315,95 @@ impl InternalCoordinates {
             })
             .collect()
     }
+}
+
+/// A set of bonds, each a sorted pair of atom indices.
+type Bonds = HashSet<(usize, usize)>;
+
+/// The central bond of a torsion entry, as a sorted pair.
+fn central_bond(entry: &[usize]) -> (usize, usize) {
+    (entry[1].min(entry[2]), entry[1].max(entry[2]))
+}
+
+/// Ring bonds and symmetric rotor bonds of the solute, as sorted pairs of
+/// topology indices. A bond lies on a ring exactly when it is not a bridge of
+/// the bond graph.
+fn bond_topology(prmtop: &Prmtop, adjacency: &[Vec<usize>], include: &[bool]) -> (Bonds, Bonds) {
+    let n = adjacency.len();
+    let neighbors = |a: usize| adjacency[a].iter().copied().filter(move |&b| include[b]);
+
+    // Iterative Tarjan bridge search, so large molecules cannot overflow the
+    // stack.
+    let mut discovered = vec![usize::MAX; n];
+    let mut low = vec![0usize; n];
+    let mut timer = 0;
+    let mut bridges = HashSet::new();
+    for root in (0..n).filter(|&a| include[a]) {
+        if discovered[root] != usize::MAX {
+            continue;
+        }
+        discovered[root] = timer;
+        low[root] = timer;
+        timer += 1;
+        // (atom, parent, next neighbor to visit)
+        let mut stack = vec![(root, usize::MAX, 0usize)];
+        while let Some(top) = stack.len().checked_sub(1) {
+            let (atom, parent, next) = stack[top];
+            if let Some(&neighbor) = adjacency[atom].get(next) {
+                stack[top].2 += 1;
+                if !include[neighbor] || neighbor == parent {
+                    continue;
+                }
+                if discovered[neighbor] == usize::MAX {
+                    discovered[neighbor] = timer;
+                    low[neighbor] = timer;
+                    timer += 1;
+                    stack.push((neighbor, atom, 0));
+                } else {
+                    low[atom] = low[atom].min(discovered[neighbor]);
+                }
+            } else {
+                stack.pop();
+                if let Some(&(up, _, _)) = stack.last() {
+                    low[up] = low[up].min(low[atom]);
+                    if low[atom] > discovered[up] {
+                        bridges.insert((up.min(atom), up.max(atom)));
+                    }
+                }
+            }
+        }
+    }
+
+    let element = |a: usize| -> u64 {
+        match prmtop.atomic_numbers.get(a) {
+            Some(&z) => z as u64,
+            None => prmtop.masses[a].to_bits(),
+        }
+    };
+    let mut ring_bonds = HashSet::new();
+    let mut symmetric_rotor_bonds = HashSet::new();
+    for a in (0..n).filter(|&a| include[a]) {
+        for b in neighbors(a).filter(|&b| a < b) {
+            let bond = (a, b);
+            if !bridges.contains(&bond) {
+                ring_bonds.insert(bond);
+                continue;
+            }
+            // One end carries only two or more terminal atoms of one element.
+            let symmetric_end = |end: usize, other: usize| {
+                let substituents: Vec<usize> = neighbors(end).filter(|&x| x != other).collect();
+                substituents.len() >= 2
+                    && substituents.iter().all(|&x| neighbors(x).count() == 1)
+                    && substituents
+                        .iter()
+                        .all(|&x| element(x) == element(substituents[0]))
+            };
+            if symmetric_end(a, b) || symmetric_end(b, a) {
+                symmetric_rotor_bonds.insert(bond);
+            }
+        }
+    }
+    (ring_bonds, symmetric_rotor_bonds)
 }
 
 /// `angle` wrapped to (-pi, pi], the range of the torsions themselves.

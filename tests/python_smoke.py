@@ -32,6 +32,8 @@ EXPECTED_EXPORTS = {
     "estimate_coordinate_mutual_information",
     "estimate_quasi_harmonic_entropy",
     "estimate_coordinate_quasi_harmonic_entropy",
+    "estimate_split_entropy",
+    "detect_basins",
 }
 
 
@@ -286,6 +288,51 @@ def check_quasi_harmonic():
     print(f"quasi-harmonic: QH {got['quasi_harmonic']!r}, BQH {got['boltzmann_quasi_harmonic']!r}")
 
 
+def check_split():
+    """Split entropy and basin detection on synthetic data; values are checked
+    against the library in the Rust tests, so this checks the bindings."""
+    rng = np.random.default_rng(11)
+    n = 6000
+    well = rng.integers(0, 2, size=n)
+    phi = np.angle(np.exp(1j * (np.where(well == 0, -1.5, 1.5) + 0.25 * rng.normal(size=n))))
+    x = np.where(well == 0, 0.1, 0.3) * rng.normal(size=n)
+    narrow = np.angle(np.exp(1j * (1.0 + 0.1 * rng.normal(size=n))))
+    data = np.array([phi, x, narrow])
+    periods = [2 * math.pi, None, 2 * math.pi]
+
+    basins = nn_entropy.detect_basins(phi)
+    assert basins["count"] == 2 and basins["soft"], basins["count"]
+    assert len(basins["labels"]) == n and abs(sum(basins["populations"]) - 1) < 1e-12
+    assert not nn_entropy.detect_basins(narrow)["soft"]
+    assert nn_entropy.detect_basins(rng.uniform(0, 2 * math.pi, size=n))["soft"]
+
+    result = nn_entropy.estimate_split_entropy(data, periods=periods)
+    assert result["soft_coordinates"] == [0] and result["hard_coordinates"] == [1, 2], result
+    assert abs(result["total"] - (result["soft"] + result["hard"] + result["coupling"])) < 1e-12
+    assert result["coupling"] <= 0 and result["states"] is None
+    assert result["basin_counts"] == [2, None, 1], result["basin_counts"]
+
+    states = nn_entropy.estimate_split_entropy(
+        data, periods=periods, soft=[0], coupling="states", state_labels=list(well)
+    )
+    assert len(states["states"]["states"]) == 2 and states["states"]["dropped_frames"] == 0
+    for bad in (dict(soft="topology"), dict(coupling="maybe"), dict(state_labels=[0] * n)):
+        try:
+            nn_entropy.estimate_split_entropy(data, periods=periods, **bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad} should raise ValueError")
+
+    fixtures = Path(__file__).resolve().parent / "fixtures"
+    system = nn_entropy.load_system(str(fixtures / "test.parm7"), str(fixtures / "test.nc"))
+    kinds = system.kinds
+    assert system.soft_torsions and all(kinds[i] == "torsion" for i in system.soft_torsions)
+    assert set(system.symmetric_rotor_torsions) <= set(system.soft_torsions)
+    assert all(kinds[i] in ("torsion", "phase angle") for i in system.ring_torsions)
+    print(f"split: {result['total']!r}, soft torsions {system.soft_torsions}")
+
+
 def main():
     for check in (
         check_exports,
@@ -299,6 +346,7 @@ def main():
         check_invalid_period_is_rejected,
         check_coordinate_options,
         check_quasi_harmonic,
+        check_split,
     ):
         check()
     print("\nall smoke checks passed")

@@ -147,7 +147,8 @@ pub fn unit_ball_volume(dimensions: usize) -> f64 {
         2 => std::f64::consts::PI,
         3 => 4.0 * std::f64::consts::PI / 3.0,
         4 => std::f64::consts::PI.powi(2) / 2.0,
-        other => panic!("no unit ball volume for dimension {other}"),
+        // V_d = (2 pi / d) V_(d-2), independently of the crate's Gamma form.
+        d => 2.0 * std::f64::consts::PI / d as f64 * unit_ball_volume(d - 2),
     }
 }
 

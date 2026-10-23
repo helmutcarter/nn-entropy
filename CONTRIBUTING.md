@@ -17,14 +17,18 @@ The suite is split by concern:
 | `tests/geometry.rs` | Bonds, angles and torsions from constructed configurations; the torsion sign convention; the end-to-end BAT path on the fixture. |
 | `tests/topology.rs` | Atom selection and file reading across layouts the fixture does not cover: solvent before or between solute molecules, counter-ions, four-point and non-Amber water, and NetCDF corner cases. |
 | `tests/validation.rs` | The input-validation contract: which inputs are refused and what each error says. |
-| `tests/coordinates.rs` | Coordinate sets: 3N - 6 tree bonds forming a spanning tree, phase angles as wrapped torsion offsets that are stiff for a rigid rotor, and the BAT Jacobian against the constructed geometry. |
+| `tests/coordinates.rs` | Coordinate sets: 3N - 6 tree bonds forming a spanning tree, phase angles as wrapped torsion offsets that are stiff for a rigid rotor, the BAT Jacobian against the constructed geometry, and the ring and rotor classification (soft, symmetric-rotor and ring torsions of ethane, cyclopropane, methylcyclopropane and a chain). |
 | `tests/quasi_harmonic.rs` | QH against the Gaussian entropy of independently computed sample covariances and the bivariate-normal closed form, BQH correcting QH for a bimodal coordinate, histograms against hand-counted bins, the complex torsion correlations against hand-computed Hermitian coefficients and determinants, the per-coordinate shares (sums, the two-coordinate split, relabelling, independence), periodic centering, validation, and the CLI flags. |
+| `tests/joint.rs` | Joint nearest-neighbor entropy at run-time dimension: the unit-ball volume against an independent recurrence, bit-equality with the const-generic search, brute-force agreement for 5-8 dimensions across the periodic wrap and with a Theiler window, and zero entropy on a uniform periodic box. |
+| `tests/basins.rs` | Basin detection on samples from known wells: 1, 2 and 3 wells (including across the wrap), uniform distributions, rare wells, rotation invariance, determinism, and invalid input. |
+| `tests/split.rs` | The split estimator: exact identities with the estimators it is built from, a closed-form Gaussian coupling, a well-dependent system of known entropy recovered by per-state coupling, sparse-state renormalization, soft-set detection, validation, and the CLI flags. |
 | `tests/legacy.rs` | `--legacy` against totals produced by the original Python script on the fixture, compared bit for bit, and the legacy angle and torsion formulas. |
 | `tests/theiler.rs` | Theiler window: bitwise equality with the plain estimator at `W = 0`, brute-force agreement for every window and dimension, the closed-form constant, validation, and AR(1) bias behavior. |
 | `tests/testing.rs`, `tests/entropy.rs`, `tests/cli.rs` | Unit tests, fixture regressions, and CLI behavior. |
 
 Expected values in `analytic.rs`, `reference.rs`, `invariance.rs`, `geometry.rs`,
-`coordinates.rs`, `quasi_harmonic.rs` and `theiler.rs` are derived from theory or
+`coordinates.rs`, `quasi_harmonic.rs`, `joint.rs`, `basins.rs`, `split.rs` and
+`theiler.rs` are derived from theory or
 from an independent reference, never recorded from a previous run; those in
 `legacy.rs` were produced by the original Python script. The pinned totals in
 `entropy.rs` are regression values.
@@ -60,8 +64,10 @@ The user guide lives in `docs/` as an mdBook. Build it with `mdbook build docs` 
 ## Project layout
 - `src/lib.rs`: the nearest-neighbor estimators, the MIE, and the nearest-neighbor search; also the crate documentation.
 - `src/quasi_harmonic.rs`: the QH and BQH estimators.
+- `src/split.rs`: the split (soft/hard) estimator.
+- `src/basins.rs`: basin detection for periodic coordinates.
 - `src/legacy.rs`: the reproduction of the original Python implementation.
-- `src/bat_library/`: `.parm7` parser, NetCDF trajectory reader, solute selection, and BAT coordinate construction (`geometry.rs` holds the bond, angle and torsion functions).
+- `src/bat_library/`: `.parm7` parser, NetCDF trajectory reader, solute selection, BAT coordinate construction, and ring and rotor classification (`geometry.rs` holds the bond, angle and torsion functions).
 - `src/main.rs`: CLI entry point.
 - `src/pyo3_api.rs`: Python bindings.
 - `docs/`: the user guide (mdBook).

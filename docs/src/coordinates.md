@@ -8,6 +8,16 @@ By default, file-based calculations use every bond between two heavy atoms (ring
 
 **The BAT Jacobian** (`--jacobian`, `System.mean_log_jacobian`, `InternalCoordinates::log_jacobian`) is ln J = Σ 2 ln b + Σ ln sin θ over the tree's bonds and angles. Adding its mean to the BAT entropy gives the entropy of the internal motion measured in Cartesian coordinates. Bond lengths are in the trajectory's units (Å for Amber), so ln J depends on that choice, just as the bond-length entropies do. Phase angles do not change it.
 
+## Rotatable, ring and rotor torsions
+
+Each torsion is also classified by the bond it turns about, for the [split estimator](split.md):
+
+- **Soft torsions** (`soft_torsions`): the primary torsion about each bond that is not on a ring. With phase angles these are the coordinates of type `torsion` off rings.
+- **Symmetric rotor torsions** (`symmetric_rotor_torsions`): soft torsions about a bond one end of which carries only two or more terminal atoms of one element, as in CH<sub>3</sub>, NH<sub>3</sub><sup>+</sup> and CF<sub>3</sub>. Their basins are equivalent.
+- **Ring torsions** (`ring_torsions`): torsions about a bond that lies on a ring, found as the bonds that are not bridges of the molecule's bond graph.
+
+In Rust these are methods of `InternalCoordinates`; in Python, properties of a `System`. They depend only on the topology, and `--torsions-only` keeps them.
+
 ## Which atoms are used
 
 - File-based calculations select the solute automatically. Water is excluded when its atom type is an Amber water type (`OW`, `HW`, `EP`, `EPW`) or its residue is a water name (`WAT`, `HOH`, `SOL`, `TIP3`, `SPCE`, `OPC`, and similar), so four-point models and non-Amber water types are handled. Massless virtual sites are excluded because they carry no degrees of freedom. Monatomic species such as counter-ions contribute nothing, since they have no internal coordinates, and a diatomic contributes only its bond length (with the default bond set, only when both atoms are heavy). Solute atoms may appear anywhere in the topology.

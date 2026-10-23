@@ -16,6 +16,10 @@ use nn_entropy::bat_library::{CoordinateOptions, InternalCoordinates};
 use nn_entropy::quasi_harmonic::{
     MarginalEstimator, PeriodicCorrelation, QuasiHarmonicOptions, estimate_quasi_harmonic_entropy,
 };
+use nn_entropy::split::{
+    Coupling, HardEstimator, SoftEstimator, SoftSelection, SplitOptions, StateDefinition,
+    StateOptions, estimate_split_entropy,
+};
 use nn_entropy::{CoordinateMetric, EntropyOptions, calculate_entropy};
 
 type Error = Box<dyn std::error::Error>;
@@ -25,6 +29,9 @@ struct State {
     data: Vec<Vec<f64>>,
     metrics: Vec<CoordinateMetric>,
     atoms: Vec<Vec<usize>>,
+    /// The split estimator's topological soft set, and its methyl rotors.
+    soft: Vec<usize>,
+    symmetric: Vec<usize>,
 }
 
 fn load(dir: &Path, state: &str, phase_angles: bool) -> Result<State, Error> {
@@ -40,6 +47,8 @@ fn load(dir: &Path, state: &str, phase_angles: bool) -> Result<State, Error> {
         data,
         metrics: internal.coordinate_metrics(),
         atoms: internal.coordinate_atoms(),
+        soft: internal.soft_torsions(),
+        symmetric: internal.symmetric_rotor_torsions(),
     })
 }
 
@@ -95,6 +104,39 @@ fn estimates(state: &State) -> Result<Vec<f64>, String> {
     ])
 }
 
+/// The split estimator's default and two variants, with the topological soft
+/// set. Split needs phase angles, so these run only with them.
+fn split_estimates(state: &State) -> Result<Vec<f64>, String> {
+    let frames = state.data[0].len();
+    let options = EntropyOptions {
+        metrics: Some(&state.metrics),
+        ..Default::default()
+    };
+    let default = SplitOptions::new(SoftSelection::Indices(&state.soft));
+    let mut per_state = default;
+    per_state.coupling = Coupling::PerState(StateOptions {
+        definition: StateDefinition::Detected {
+            defining: None,
+            exclude: &state.symmetric,
+        },
+        ..Default::default()
+    });
+    let mut joint_bqh = default;
+    joint_bqh.soft_estimator = SoftEstimator::JointNearestNeighbor;
+    joint_bqh.hard_estimator = HardEstimator::BoltzmannQuasiHarmonic;
+    joint_bqh.coupling = Coupling::None;
+    [default, per_state, joint_bqh]
+        .iter()
+        .map(|split| estimate_split_entropy(&state.data, frames, split, &options).map(|r| r.total))
+        .collect()
+}
+
+const SPLIT_ESTIMATORS: [&str; 3] = [
+    "split",
+    "split, per-state coupling",
+    "split, joint soft, BQH hard",
+];
+
 const ESTIMATORS: [&str; 5] = [
     "BQH",
     "BQH, centered torsions",
@@ -123,13 +165,17 @@ fn main() -> Result<(), Error> {
             } else {
                 "raw torsions"
             };
-            for (name, (e0, e1)) in ESTIMATORS
-                .iter()
-                .zip(estimates(&s0)?.into_iter().zip(estimates(&s1)?))
-            {
+            let (mut names, mut e0, mut e1) =
+                (ESTIMATORS.to_vec(), estimates(&s0)?, estimates(&s1)?);
+            if phase_angles {
+                names.extend(SPLIT_ESTIMATORS);
+                e0.extend(split_estimates(&s0)?);
+                e1.extend(split_estimates(&s1)?);
+            }
+            for (name, (e0, e1)) in names.iter().zip(e0.into_iter().zip(e1)) {
                 let estimate = e0 - e1 + jacobian;
                 println!(
-                    "  {coordinates:<13} {name:<24} {estimate:8.3}  error {:+7.3}",
+                    "  {coordinates:<13} {name:<28} {estimate:8.3}  error {:+7.3}",
                     estimate - reference
                 );
             }

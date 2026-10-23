@@ -906,7 +906,7 @@ mod cli {
                 &["--estimator", "qh", "--legacy"][..],
                 "--estimator other than nn",
             ),
-            (&["--estimator", "kde"][..], "must be nn, qh or bqh"),
+            (&["--estimator", "kde"][..], "must be nn, qh, bqh or split"),
             (
                 &["--periodic-correlation", "complex"][..],
                 "--periodic-correlation applies only",

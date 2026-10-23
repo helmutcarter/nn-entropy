@@ -5,12 +5,17 @@
 //! the GIL while it runs.
 
 #![allow(unsafe_op_in_unsafe_fn)]
+use crate::basins::{BasinOptions, detect_basins as detect_basins_impl};
 use crate::bat_library::{BondSet, CoordinateKind, CoordinateOptions, InternalCoordinates};
 use crate::quasi_harmonic::{MarginalEstimator, PeriodicCorrelation, QuasiHarmonicOptions};
+use crate::split::{
+    Coupling, HardEstimator, SoftEstimator, SoftFeatures, SoftSelection, SplitEntropy,
+    SplitOptions, StateDefinition, StateOptions, estimate_split_entropy as split_impl,
+};
 use crate::{CoordinateMetric, EntropyOptions, FiniteSampleConstant};
 use numpy::PyReadonlyArray2;
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyDict};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -189,7 +194,212 @@ fn system_from_trajectory(
         mean_log_jacobian,
         atoms: internal.coordinate_atoms(),
         kinds: internal.coordinate_kinds(),
+        soft_torsions: internal.soft_torsions(),
+        symmetric_rotor_torsions: internal.symmetric_rotor_torsions(),
+        ring_torsions: internal.ring_torsions(),
     })
+}
+
+/// The `soft` argument of `estimate_split_entropy`.
+enum SoftArgument {
+    /// None: topology for a System, detection for an array.
+    Default,
+    Topology,
+    Detect,
+    List(Vec<usize>),
+}
+
+impl SoftArgument {
+    fn extract(soft: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let Some(soft) = soft.filter(|soft| !soft.is_none()) else {
+            return Ok(Self::Default);
+        };
+        if let Ok(name) = soft.extract::<String>() {
+            return match name.as_str() {
+                "topology" => Ok(Self::Topology),
+                "detect" => Ok(Self::Detect),
+                other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "soft must be None, 'topology', 'detect' or a list of coordinate indices, got {other:?}"
+                ))),
+            };
+        }
+        Ok(Self::List(soft.extract()?))
+    }
+}
+
+/// The keyword arguments of `estimate_split_entropy`, checked.
+struct SplitArguments {
+    soft: SoftArgument,
+    soft_estimator: SoftEstimator,
+    hard_estimator: HardEstimator,
+    hard: QuasiHarmonicOptions,
+    coupling: String,
+    soft_features: SoftFeatures,
+    state_coordinates: Option<Vec<usize>>,
+    state_labels: Option<Vec<u32>>,
+    min_state_frames: usize,
+}
+
+impl SplitArguments {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        soft: Option<&Bound<'_, PyAny>>,
+        soft_estimator: &str,
+        mie_order: usize,
+        hard_estimator: &str,
+        coupling: &str,
+        soft_features: &str,
+        state_coordinates: Option<Vec<usize>>,
+        state_labels: Option<Vec<u32>>,
+        min_state_frames: usize,
+        histogram_bins: Option<usize>,
+        periodic_correlation: &str,
+    ) -> PyResult<Self> {
+        let invalid = |name: &str, allowed: &str, got: &str| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "{name} must be {allowed}, got {got:?}"
+            ))
+        };
+        let soft_estimator = match soft_estimator {
+            "mie" => SoftEstimator::NearestNeighborMie { order: mie_order },
+            "joint" => SoftEstimator::JointNearestNeighbor,
+            other => return Err(invalid("soft_estimator", "'mie' or 'joint'", other)),
+        };
+        let hard_estimator = match hard_estimator {
+            "qh" => HardEstimator::QuasiHarmonic,
+            "bqh" => HardEstimator::BoltzmannQuasiHarmonic,
+            other => return Err(invalid("hard_estimator", "'qh' or 'bqh'", other)),
+        };
+        if !["gaussian", "states", "none"].contains(&coupling) {
+            return Err(invalid(
+                "coupling",
+                "'gaussian', 'states' or 'none'",
+                coupling,
+            ));
+        }
+        let soft_features = match soft_features {
+            "complex" => SoftFeatures::Complex,
+            "cossin" => SoftFeatures::CosSin,
+            other => return Err(invalid("soft_features", "'complex' or 'cossin'", other)),
+        };
+        if coupling != "states" && (state_coordinates.is_some() || state_labels.is_some()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "state_coordinates and state_labels apply only to coupling='states'",
+            ));
+        }
+        if state_coordinates.is_some() && state_labels.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "pass state_coordinates or state_labels, not both",
+            ));
+        }
+        Ok(Self {
+            soft: SoftArgument::extract(soft)?,
+            soft_estimator,
+            hard_estimator,
+            hard: quasi_harmonic_options(histogram_bins, periodic_correlation)?,
+            coupling: coupling.to_string(),
+            soft_features,
+            state_coordinates,
+            state_labels,
+            min_state_frames,
+        })
+    }
+
+    /// The split entropy of `data`. `topology` is a System's soft torsions and
+    /// symmetric rotors; None for an array.
+    fn estimate(
+        &self,
+        data: &[Vec<f64>],
+        frames: usize,
+        metrics: &[CoordinateMetric],
+        topology: Option<(&[usize], &[usize])>,
+        exact_constant: bool,
+        theiler_window: usize,
+    ) -> PyResult<SplitEntropy> {
+        let selection = match (&self.soft, topology) {
+            (SoftArgument::List(list), _) => SoftSelection::Indices(list),
+            (SoftArgument::Detect, _) | (SoftArgument::Default, None) => {
+                SoftSelection::Detect { candidates: None }
+            }
+            (SoftArgument::Topology | SoftArgument::Default, Some((soft, _))) => {
+                SoftSelection::Indices(soft)
+            }
+            (SoftArgument::Topology, None) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "soft='topology' needs a System; for an array, pass 'detect' or a list",
+                ));
+            }
+        };
+        let symmetric: &[usize] = topology.map_or(&[], |(_, symmetric)| symmetric);
+        let mut split = SplitOptions::new(selection);
+        split.soft_estimator = self.soft_estimator;
+        split.hard_estimator = self.hard_estimator;
+        split.hard = self.hard;
+        split.coupling = match self.coupling.as_str() {
+            "none" => Coupling::None,
+            "gaussian" => Coupling::Gaussian {
+                features: self.soft_features,
+            },
+            _ => Coupling::PerState(StateOptions {
+                definition: match (&self.state_labels, &self.state_coordinates) {
+                    (Some(labels), _) => StateDefinition::Labels(labels),
+                    (None, Some(defining)) => StateDefinition::Detected {
+                        defining: Some(defining),
+                        exclude: &[],
+                    },
+                    (None, None) => StateDefinition::Detected {
+                        defining: None,
+                        exclude: symmetric,
+                    },
+                },
+                min_frames: self.min_state_frames,
+                ..Default::default()
+            }),
+        };
+        split_impl(
+            data,
+            frames,
+            &split,
+            &entropy_options(metrics, exact_constant, theiler_window),
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+}
+
+/// `SplitEntropy` as a dict.
+fn split_to_dict(py: Python<'_>, result: SplitEntropy) -> PyResult<PyObject> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("total", result.total)?;
+    dict.set_item("soft", result.soft)?;
+    dict.set_item("hard", result.hard)?;
+    dict.set_item("coupling", result.coupling)?;
+    dict.set_item("soft_coordinates", result.soft_coordinates)?;
+    dict.set_item("hard_coordinates", result.hard_coordinates)?;
+    dict.set_item("basin_counts", result.basin_counts)?;
+    match result.states {
+        None => dict.set_item("states", py.None())?,
+        Some(summary) => {
+            let states = PyDict::new_bound(py);
+            states.set_item("defining", summary.defining)?;
+            states.set_item("dropped_frames", summary.dropped_frames)?;
+            states.set_item("dropped_population", summary.dropped_population)?;
+            let list: Vec<PyObject> = summary
+                .states
+                .into_iter()
+                .map(|state| -> PyResult<PyObject> {
+                    let entry = PyDict::new_bound(py);
+                    entry.set_item("basins", state.basins)?;
+                    entry.set_item("frames", state.frames)?;
+                    entry.set_item("population", state.population)?;
+                    entry.set_item("hard_entropy", state.hard_entropy)?;
+                    Ok(entry.into_py(py))
+                })
+                .collect::<PyResult<_>>()?;
+            states.set_item("states", list)?;
+            dict.set_item("states", states)?;
+        }
+    }
+    Ok(dict.into_py(py))
 }
 
 /// The data, frame count and metrics of a System or an array. `periodic=False`
@@ -231,6 +441,9 @@ struct System {
     mean_log_jacobian: Option<f64>,
     atoms: Vec<Vec<usize>>,
     kinds: Vec<CoordinateKind>,
+    soft_torsions: Vec<usize>,
+    symmetric_rotor_torsions: Vec<usize>,
+    ring_torsions: Vec<usize>,
 }
 
 impl System {
@@ -281,6 +494,25 @@ impl System {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The primary torsion about each rotatable (non-ring) bond: the split
+    /// estimator's default soft set.
+    #[getter]
+    fn soft_torsions(&self) -> Vec<usize> {
+        self.soft_torsions.clone()
+    }
+
+    /// The soft torsions about symmetric rotors such as methyl groups.
+    #[getter]
+    fn symmetric_rotor_torsions(&self) -> Vec<usize> {
+        self.symmetric_rotor_torsions.clone()
+    }
+
+    /// Torsions about ring bonds.
+    #[getter]
+    fn ring_torsions(&self) -> Vec<usize> {
+        self.ring_torsions.clone()
     }
 
     #[getter]
@@ -398,6 +630,55 @@ impl System {
                 theiler_window,
             )
         })
+    }
+
+    /// Split entropy; see the module function of the same name. `soft=None`
+    /// uses the System's soft torsions.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (soft=None, soft_estimator="mie", mie_order=2, hard_estimator="qh", coupling="gaussian", soft_features="complex", state_coordinates=None, state_labels=None, min_state_frames=300, histogram_bins=None, periodic_correlation="centered", periodic=true, exact_constant=false, theiler_window=0))]
+    fn estimate_split_entropy(
+        &self,
+        py: Python<'_>,
+        soft: Option<&Bound<'_, PyAny>>,
+        soft_estimator: &str,
+        mie_order: usize,
+        hard_estimator: &str,
+        coupling: &str,
+        soft_features: &str,
+        state_coordinates: Option<Vec<usize>>,
+        state_labels: Option<Vec<u32>>,
+        min_state_frames: usize,
+        histogram_bins: Option<usize>,
+        periodic_correlation: &str,
+        periodic: bool,
+        exact_constant: bool,
+        theiler_window: usize,
+    ) -> PyResult<PyObject> {
+        let arguments = SplitArguments::new(
+            soft,
+            soft_estimator,
+            mie_order,
+            hard_estimator,
+            coupling,
+            soft_features,
+            state_coordinates,
+            state_labels,
+            min_state_frames,
+            histogram_bins,
+            periodic_correlation,
+        )?;
+        let metrics = self.metrics_for(periodic);
+        let result = py.allow_threads(|| {
+            arguments.estimate(
+                &self.one_d_data,
+                self.frames,
+                &metrics,
+                Some((&self.soft_torsions, &self.symmetric_rotor_torsions)),
+                exact_constant,
+                theiler_window,
+            )
+        })?;
+        split_to_dict(py, result)
     }
 
     #[pyo3(signature = (periodic=true, exact_constant=false, theiler_window=0))]
@@ -588,6 +869,119 @@ fn estimate_coordinate_quasi_harmonic_entropy(
     })
 }
 
+/// Split entropy: soft coordinates by a nearest-neighbor estimate, hard ones by
+/// a Gaussian, plus a coupling term. Returns a dict with `total`, `soft`,
+/// `hard`, `coupling`, `soft_coordinates`, `hard_coordinates`, `basin_counts`
+/// and `states`. `soft` is None, "topology" (a System's soft torsions),
+/// "detect", or a list of coordinate indices from 0; None means "topology"
+/// for a System and "detect" for an array.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction(signature = (data, soft=None, soft_estimator="mie", mie_order=2, hard_estimator="qh", coupling="gaussian", soft_features="complex", state_coordinates=None, state_labels=None, min_state_frames=300, histogram_bins=None, periodic_correlation="centered", periods=None, periodic=true, exact_constant=false, theiler_window=0))]
+fn estimate_split_entropy(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    soft: Option<&Bound<'_, PyAny>>,
+    soft_estimator: &str,
+    mie_order: usize,
+    hard_estimator: &str,
+    coupling: &str,
+    soft_features: &str,
+    state_coordinates: Option<Vec<usize>>,
+    state_labels: Option<Vec<u32>>,
+    min_state_frames: usize,
+    histogram_bins: Option<usize>,
+    periodic_correlation: &str,
+    periods: Option<Vec<Option<f64>>>,
+    periodic: bool,
+    exact_constant: bool,
+    theiler_window: usize,
+) -> PyResult<PyObject> {
+    if let Ok(system) = data.extract::<PyRef<'_, System>>() {
+        if periods.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "periods cannot override metrics stored in a System",
+            ));
+        }
+        return system.estimate_split_entropy(
+            py,
+            soft,
+            soft_estimator,
+            mie_order,
+            hard_estimator,
+            coupling,
+            soft_features,
+            state_coordinates,
+            state_labels,
+            min_state_frames,
+            histogram_bins,
+            periodic_correlation,
+            periodic,
+            exact_constant,
+            theiler_window,
+        );
+    }
+    let arguments = SplitArguments::new(
+        soft,
+        soft_estimator,
+        mie_order,
+        hard_estimator,
+        coupling,
+        soft_features,
+        state_coordinates,
+        state_labels,
+        min_state_frames,
+        histogram_bins,
+        periodic_correlation,
+    )?;
+    let (one_d_data, frames_end, metrics) = one_d_data_from_py(data, periods, periodic)?;
+    let result = py.allow_threads(|| {
+        arguments.estimate(
+            &one_d_data,
+            frames_end,
+            &metrics,
+            None,
+            exact_constant,
+            theiler_window,
+        )
+    })?;
+    split_to_dict(py, result)
+}
+
+/// The basins of a periodic coordinate, as a dict with `count`, `labels` (the
+/// basin of each value), `boundaries`, `populations`, `resultant` and `soft`
+/// (whether the split estimator would call it soft).
+// Python keyword arguments, so the count is set by the public signature.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction(signature = (values, period=std::f64::consts::TAU, bins=72, smoothing=2.0, saddle_fraction=0.5, min_population=0.02, free_rotor_resultant=Some(0.3)))]
+fn detect_basins(
+    py: Python<'_>,
+    values: Vec<f64>,
+    period: f64,
+    bins: usize,
+    smoothing: f64,
+    saddle_fraction: f64,
+    min_population: f64,
+    free_rotor_resultant: Option<f64>,
+) -> PyResult<PyObject> {
+    let options = BasinOptions {
+        bins,
+        smoothing,
+        saddle_fraction,
+        min_population,
+        free_rotor_resultant,
+    };
+    let basins = detect_basins_impl(&values, CoordinateMetric::Periodic { period }, &options)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let dict = PyDict::new_bound(py);
+    dict.set_item("soft", basins.is_soft(&options))?;
+    dict.set_item("count", basins.count)?;
+    dict.set_item("labels", basins.labels)?;
+    dict.set_item("boundaries", basins.boundaries)?;
+    dict.set_item("populations", basins.populations)?;
+    dict.set_item("resultant", basins.resultant)?;
+    Ok(dict.into_py(py))
+}
+
 #[pymodule]
 fn nn_entropy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<System>()?;
@@ -596,6 +990,8 @@ fn nn_entropy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_coordinate_entropy, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_coordinate_mutual_information, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_quasi_harmonic_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_split_entropy, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_basins, m)?)?;
     m.add_function(wrap_pyfunction!(
         estimate_coordinate_quasi_harmonic_entropy,
         m

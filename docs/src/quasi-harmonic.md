@@ -24,4 +24,6 @@ The covariance is the population covariance over the selected frames, so there m
 
 Like the NN MIE's even split of pairwise mutual information, this is one convention for dividing a quantity that belongs to the whole set; its advantage is that it involves no further choices, such as an ordering of the coordinates.
 
+The [split estimator](split.md) combines both approaches: QH or BQH for the stiff coordinates, a nearest-neighbor estimate for the soft torsions, and the Gaussian correlation term of this page for the coupling between them.
+
 See [Validation](validation.md) for how the estimators compare with thermodynamic reference values.

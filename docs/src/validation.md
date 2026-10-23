@@ -65,6 +65,18 @@ NN MIE-2 is `calculate_entropy` at order 2.
 "Raw torsions" sets `CoordinateOptions::phase_angles`
 to false.
 
+### Split estimator
+
+The [split estimator](split.md) with the topological soft set, on the same trajectories (`S0 - S1` in nats). Its defaults are the best of 96 configurations scored here: soft estimator {MIE-2, joint with either finite-sample constant} × hard estimator {QH, BQH} × hard phase angles {centered, complex} × coupling {per-state, Gaussian e^{iφ}, Gaussian cos/sin, none} × soft set {topology, detected}.
+
+| estimator | rep 1 | rep 2 | rep 3 | mean error | RMSE |
+|---|---|---|---|---|---|
+| **split** (MIE-2 soft, QH hard, Gaussian coupling) | 14.215 | 14.499 | 14.407 | +0.050 | 0.063 |
+| split, per-state coupling | 14.246 | 14.529 | 14.440 | +0.081 | 0.089 |
+| split, joint soft, BQH hard, no coupling | 14.220 | 14.557 | 14.368 | +0.057 | 0.078 |
+
+On butane the coupling between soft and hard coordinates is small (Gaussian and no coupling differ by 0.001 nats), detection chooses the same soft set as topology, and the finite-sample constant cancels in the difference. Centered hard phase angles beat complex ones by about 0.02 nats, and per-state coupling is about 0.03 nats worse than Gaussian coupling, from the bias of a Gaussian fitted within each state. The split estimator improves on an earlier hand-tuned version of the same decomposition (soft torsions by a joint estimate or MIE-2, hard Gaussian within hand-binned states: +0.06 and +0.14 nats), but plain BQH is better on butane, whose single multi-basin torsion BQH's nearest-neighbor marginals already describe.
+
 ### What it shows
 
 - **BQH with phase angles agrees with the reference within the reference's

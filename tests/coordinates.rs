@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 use common::Rng;
 use common::amber::{
-    NetcdfOptions, Topology, concat_frames, scratch_path, write_netcdf, write_prmtop,
+    CHAIN_ATOMS, CHAIN_BONDS, NetcdfOptions, Topology, chain_frames, concat_frames, scratch_path,
+    write_netcdf, write_prmtop,
 };
 use nn_entropy::bat_library::{BondSet, CoordinateKind, CoordinateOptions, InternalCoordinates};
 
@@ -576,4 +577,151 @@ fn coordinate_kinds_follow_atoms_and_phase_references() {
         CoordinateKind::PhaseAngle { reference: 3 }.name(),
         "phase angle"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Ring and rotor topology
+// ---------------------------------------------------------------------------
+
+/// Methylcyclopropane: a three-membered ring with a methyl group on C1.
+const METHYLCYCLOPROPANE_ATOMS: [(&str, &str, f64, i64); 12] = [
+    ("C1", "cx", 12.01, 6),
+    ("C2", "cx", 12.01, 6),
+    ("C3", "cx", 12.01, 6),
+    ("C4", "c3", 12.01, 6),
+    ("H1", "hc", 1.008, 1),
+    ("H21", "hc", 1.008, 1),
+    ("H22", "hc", 1.008, 1),
+    ("H31", "hc", 1.008, 1),
+    ("H32", "hc", 1.008, 1),
+    ("H41", "hc", 1.008, 1),
+    ("H42", "hc", 1.008, 1),
+    ("H43", "hc", 1.008, 1),
+];
+const METHYLCYCLOPROPANE_BONDS: [(usize, usize); 12] = [
+    (0, 1),
+    (1, 2),
+    (2, 0),
+    (0, 3),
+    (0, 4),
+    (1, 5),
+    (1, 6),
+    (2, 7),
+    (2, 8),
+    (3, 9),
+    (3, 10),
+    (3, 11),
+];
+
+fn methylcyclopropane(name: &str) -> (PathBuf, PathBuf, Vec<Vec<[f64; 3]>>) {
+    let ideal: [[f64; 3]; 12] = [
+        [0.0, 0.87, 0.0],
+        [-0.75, -0.43, 0.0],
+        [0.75, -0.43, 0.0],
+        [0.0, 2.3, 0.4],
+        [0.0, 1.2, -0.95],
+        [-1.25, -0.72, 0.9],
+        [-1.25, -0.72, -0.9],
+        [1.25, -0.72, 0.9],
+        [1.25, -0.72, -0.9],
+        [0.9, 2.7, 0.0],
+        [-0.9, 2.7, 0.0],
+        [0.0, 2.5, 1.45],
+    ];
+    let mut rng = Rng::new(0x3c3e);
+    let frames = (0..FRAMES)
+        .map(|_| {
+            ideal
+                .iter()
+                .map(|p| {
+                    [
+                        p[0] + 0.03 * rng.normal(),
+                        p[1] + 0.03 * rng.normal(),
+                        p[2] + 0.03 * rng.normal(),
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+    write_system(
+        name,
+        &METHYLCYCLOPROPANE_ATOMS,
+        &METHYLCYCLOPROPANE_BONDS,
+        &frames,
+    )
+}
+
+fn central_bond(internal: &InternalCoordinates, index: usize) -> (usize, usize) {
+    let atoms = &internal.coordinate_atoms()[index];
+    (atoms[1].min(atoms[2]), atoms[1].max(atoms[2]))
+}
+
+#[test]
+fn ethane_has_one_soft_symmetric_rotor() {
+    let (top, traj, _) = ethane("topology_ethane");
+    let internal = load(&top, &traj, BondSet::HeavyAtom, true, false);
+    let soft = internal.soft_torsions();
+    assert_eq!(soft.len(), 1);
+    assert_eq!(central_bond(&internal, soft[0]), (0, 1));
+    assert_eq!(
+        internal.coordinate_kinds()[soft[0]],
+        CoordinateKind::Torsion
+    );
+    assert_eq!(internal.symmetric_rotor_torsions(), soft);
+    assert!(internal.ring_torsions().is_empty());
+}
+
+#[test]
+fn ring_torsions_are_never_soft() {
+    let (top, traj, _) = cyclopropane("topology_cyclopropane");
+    let internal = load(&top, &traj, BondSet::HeavyAtom, true, false);
+    assert!(internal.soft_torsions().is_empty());
+    let torsions: Vec<usize> = (0..internal.dim)
+        .filter(|&i| internal.coordinate_atoms()[i].len() == 4)
+        .collect();
+    assert_eq!(internal.ring_torsions(), torsions);
+}
+
+#[test]
+fn an_exocyclic_methyl_is_soft_and_the_ring_is_not() {
+    let (top, traj, _) = methylcyclopropane("topology_methylcyclopropane");
+    let internal = load(&top, &traj, BondSet::HeavyAtom, true, false);
+    let soft = internal.soft_torsions();
+    assert_eq!(soft.len(), 1, "{:?}", internal.coordinate_atoms());
+    assert_eq!(central_bond(&internal, soft[0]), (0, 3));
+    assert_eq!(internal.symmetric_rotor_torsions(), soft);
+    let ring = internal.ring_torsions();
+    assert!(!ring.is_empty());
+    for &i in &ring {
+        let bond = central_bond(&internal, i);
+        assert!(bond.0 <= 2 && bond.1 <= 2, "{bond:?} is not a ring bond");
+    }
+    // Torsions only keeps the classification.
+    let torsions = load(&top, &traj, BondSet::HeavyAtom, true, true);
+    assert_eq!(torsions.soft_torsions().len(), 1);
+    assert_eq!(torsions.ring_torsions().len(), ring.len());
+}
+
+#[test]
+fn a_chain_has_one_soft_torsion_per_rotatable_bond() {
+    let mut topology = Topology::default();
+    topology.push_molecule("BUT", &CHAIN_ATOMS, &CHAIN_BONDS);
+    let top = scratch_path("topology_chain.parm7");
+    let traj = scratch_path("topology_chain.nc");
+    write_prmtop(&top, &topology);
+    let mut rng = Rng::new(0xc4a1);
+    write_netcdf(
+        &traj,
+        &concat_frames(&[&chain_frames(&mut rng, FRAMES, [0.0, 0.0, 0.0])]),
+        NetcdfOptions::default(),
+    );
+    for phase_angles in [true, false] {
+        let internal = load(&top, &traj, BondSet::HeavyAtom, phase_angles, false);
+        let soft = internal.soft_torsions();
+        let bonds: HashSet<(usize, usize)> =
+            soft.iter().map(|&i| central_bond(&internal, i)).collect();
+        assert_eq!(bonds, HashSet::from([(1, 2), (2, 3), (3, 4)]));
+        assert_eq!(soft.len(), 3);
+        assert!(internal.symmetric_rotor_torsions().is_empty());
+    }
 }

@@ -110,7 +110,25 @@ pub fn estimate_quasi_harmonic_entropy(
     quasi_harmonic: &QuasiHarmonicOptions,
     options: &EntropyOptions,
 ) -> Result<QuasiHarmonicEntropy, String> {
-    let terms = terms(one_d_data, frames_end, quasi_harmonic, options)?;
+    quasi_harmonic_terms(one_d_data, frames_end, quasi_harmonic, options, true)
+}
+
+/// [`estimate_quasi_harmonic_entropy`], optionally without the first-order
+/// Boltzmann term, whose fields are then NaN.
+pub(crate) fn quasi_harmonic_terms(
+    one_d_data: &[Vec<f64>],
+    frames_end: usize,
+    quasi_harmonic: &QuasiHarmonicOptions,
+    options: &EntropyOptions,
+    need_boltzmann: bool,
+) -> Result<QuasiHarmonicEntropy, String> {
+    let terms = terms(
+        one_d_data,
+        frames_end,
+        quasi_harmonic,
+        options,
+        need_boltzmann,
+    )?;
     let first_order_gaussian = terms.first_order_gaussian.iter().sum();
     let first_order_boltzmann = terms.first_order_boltzmann.iter().sum();
     let correlation = 0.5 * log_determinant(&terms.correlation)?;
@@ -141,7 +159,7 @@ pub fn estimate_coordinate_quasi_harmonic_entropy(
     quasi_harmonic: &QuasiHarmonicOptions,
     options: &EntropyOptions,
 ) -> Result<CoordinateQuasiHarmonicEntropy, String> {
-    let terms = terms(one_d_data, frames_end, quasi_harmonic, options)?;
+    let terms = terms(one_d_data, frames_end, quasi_harmonic, options, true)?;
     let correlation: Vec<f64> = log_diagonal(&terms.correlation)?
         .into_iter()
         .map(|value| 0.5 * value)
@@ -169,11 +187,14 @@ struct Terms {
     correlation: Vec<Vec<Complex>>,
 }
 
+/// `need_boltzmann = false` skips the first-order Boltzmann terms, which QH
+/// does not use, and fills them with NaN.
 fn terms(
     one_d_data: &[Vec<f64>],
     frames_end: usize,
     quasi_harmonic: &QuasiHarmonicOptions,
     options: &EntropyOptions,
+    need_boltzmann: bool,
 ) -> Result<Terms, String> {
     let (one_d_data, metrics) = resolve_input(one_d_data, frames_end, options)?;
     let dimensions = one_d_data.len();
@@ -214,6 +235,13 @@ fn terms(
         .collect();
     let correlation = correlation_matrix(&deviations);
 
+    if !need_boltzmann {
+        return Ok(Terms {
+            first_order_boltzmann: vec![f64::NAN; dimensions],
+            first_order_gaussian,
+            correlation,
+        });
+    }
     let first_order_boltzmann = match quasi_harmonic.marginals {
         MarginalEstimator::NearestNeighbor => coordinate_entropy_impl(
             &one_d_data,
@@ -238,6 +266,76 @@ fn terms(
         first_order_boltzmann,
         correlation,
     })
+}
+
+/// How one coordinate enters a correlation matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Representation {
+    /// As its value; for a periodic coordinate, after centering on its
+    /// circular mean and wrapping (see [`center`]).
+    Real,
+    /// A periodic coordinate as e^(i 2 pi q / P), one complex entry.
+    Complex,
+    /// A periodic coordinate as cos and sin of 2 pi q / P, two real entries.
+    CosSin,
+}
+
+impl Representation {
+    /// How [`PeriodicCorrelation`] represents a coordinate with `metric`.
+    pub(crate) fn of(metric: CoordinateMetric, periodic: PeriodicCorrelation) -> Self {
+        match (metric, periodic) {
+            (CoordinateMetric::Periodic { .. }, PeriodicCorrelation::Complex) => Self::Complex,
+            _ => Self::Real,
+        }
+    }
+}
+
+/// ln|C| of the correlation matrix of `columns`, each entering as
+/// `representations` says (a linear coordinate is always real). The
+/// first-order terms are not computed.
+pub(crate) fn correlation_log_det(
+    columns: &[&[f64]],
+    metrics: &[CoordinateMetric],
+    representations: &[Representation],
+) -> Result<f64, String> {
+    let deviations: Vec<Deviations> = columns
+        .par_iter()
+        .zip(metrics.par_iter().zip(representations.par_iter()))
+        .flat_map_iter(
+            |(values, (metric, representation))| match (*metric, *representation) {
+                (CoordinateMetric::Periodic { period }, Representation::Complex) => {
+                    vec![complex_deviations(values, period)]
+                }
+                (CoordinateMetric::Periodic { period }, Representation::CosSin) => {
+                    let complex = complex_deviations(values, period);
+                    vec![
+                        Deviations {
+                            real: complex.real,
+                            imaginary: None,
+                        },
+                        Deviations {
+                            real: complex.imaginary.expect("complex deviations"),
+                            imaginary: None,
+                        },
+                    ]
+                }
+                (metric, _) => vec![Deviations {
+                    real: center(values, metric),
+                    imaginary: None,
+                }],
+            },
+        )
+        .map(Deviations::standardized)
+        .collect();
+    let frames = columns.first().map_or(0, |column| column.len());
+    if frames <= deviations.len() {
+        return Err(format!(
+            "the correlation matrix of {} entries needs more than {} frames, got {frames}",
+            deviations.len(),
+            deviations.len()
+        ));
+    }
+    log_determinant(&correlation_matrix(&deviations))
 }
 
 fn mean_square(values: &[f64]) -> f64 {
